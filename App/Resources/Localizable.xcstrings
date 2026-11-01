@@ -1,0 +1,698 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "" : {
+
+    },
+    "%@ (minimum)" : {
+
+    },
+    "%@ of %@ GB · %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ of %2$@ GB · %3$@"
+          }
+        }
+      }
+    },
+    "%@ remaining" : {
+
+    },
+    "%lld percent" : {
+
+    },
+    "%lld raw sensors. Names come from observation, not from Apple." : {
+
+    },
+    "%lld s" : {
+
+    },
+    "%lld system · %lld user" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld system · %2$lld user"
+          }
+        }
+      }
+    },
+    "%lld%%" : {
+
+    },
+    "%lld%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld%2$@"
+          }
+        }
+      }
+    },
+    "%lld°" : {
+
+    },
+    "Above a value" : {
+
+    },
+    "Accent dividers" : {
+
+    },
+    "Adapter" : {
+
+    },
+    "Adapter in" : {
+
+    },
+    "All normal" : {
+
+    },
+    "All sensors" : {
+
+    },
+    "Also installed: %@. Not running now, but it could conflict if started." : {
+
+    },
+    "Always" : {
+
+    },
+    "App" : {
+
+    },
+    "Appearance" : {
+
+    },
+    "Auto" : {
+
+    },
+    "Average frequency" : {
+
+    },
+    "Avg" : {
+
+    },
+    "BAT" : {
+
+    },
+    "Balanced" : {
+
+    },
+    "Battery" : {
+
+    },
+    "Battery assists" : {
+
+    },
+    "Battery is at %lld%%." : {
+
+    },
+    "Battery low: %lld%%" : {
+
+    },
+    "Below a value" : {
+
+    },
+    "Blue" : {
+
+    },
+    "CPU" : {
+
+    },
+    "CPU average" : {
+
+    },
+    "CPU efficiency" : {
+
+    },
+    "CPU hottest" : {
+
+    },
+    "CPU load %@ percent" : {
+
+    },
+    "CPU performance" : {
+
+    },
+    "Cached" : {
+
+    },
+    "Cancel top up" : {
+
+    },
+    "Capacity vs design" : {
+
+    },
+    "Charge limit" : {
+
+    },
+    "Charge limit %lld%%" : {
+
+    },
+    "Charge limit reached" : {
+
+    },
+    "Charging" : {
+
+    },
+    "Charging stops at this level and the Mac runs from the adapter, without using the battery. This is the same setting as in System Settings. macOS offers only these values." : {
+
+    },
+    "Charging · %@ to full" : {
+
+    },
+    "Checking" : {
+
+    },
+    "Checking the helper." : {
+
+    },
+    "Combine into one item" : {
+
+    },
+    "Compressed" : {
+
+    },
+    "Constant" : {
+
+    },
+    "Constant fan speed" : {
+
+    },
+    "Control needs the privileged helper. Monitoring works without it." : {
+
+    },
+    "Controlled by jMacosTweaker" : {
+
+    },
+    "Controlled by the system" : {
+
+    },
+    "Copy" : {
+
+    },
+    "Could not change this. Check Login Items in System Settings." : {
+
+    },
+    "Critical" : {
+
+    },
+    "Critical color at" : {
+
+    },
+    "Current" : {
+
+    },
+    "Curve point at %lld degrees" : {
+
+    },
+    "Custom" : {
+
+    },
+    "Custom color" : {
+
+    },
+    "Cycles" : {
+
+    },
+    "Dark" : {
+
+    },
+    "Dashboard" : {
+
+    },
+    "Defaults restored. To remove the helper, run this in Terminal:" : {
+
+    },
+    "Details" : {
+
+    },
+    "Efficiency cores" : {
+
+    },
+    "Enclosure" : {
+
+    },
+    "Export…" : {
+
+    },
+    "FAN" : {
+
+    },
+    "Fan %lld" : {
+
+    },
+    "Fan control needs a small root helper. Run this in Terminal. It copies the app to /Applications, installs the helper and pins this build. Run it again after every rebuild." : {
+
+    },
+    "Fan control and the charge limit need a small root helper, because they change hardware settings. You install it yourself with one Terminal command, and can remove it the same way. The app never asks for your password." : {
+
+    },
+    "Fan preset" : {
+
+    },
+    "Fans" : {
+
+    },
+    "Fans on %@" : {
+
+    },
+    "Follow" : {
+
+    },
+    "From battery" : {
+
+    },
+    "Fully charged" : {
+
+    },
+    "GPU" : {
+
+    },
+    "GPU load %@ percent" : {
+
+    },
+    "General" : {
+
+    },
+    "Green" : {
+
+    },
+    "High temperature" : {
+
+    },
+    "Hot above" : {
+
+    },
+    "Hottest" : {
+
+    },
+    "Hottest sensor" : {
+
+    },
+    "Hottest sensor: %@" : {
+
+    },
+    "Icon and value" : {
+
+    },
+    "If some modules do not appear, the menu bar is full, which is common beside the notch. Turn some off, or combine them." : {
+
+    },
+    "Import…" : {
+
+    },
+    "Installed for the copy in /Applications" : {
+
+    },
+    "Launch at login" : {
+
+    },
+    "Light" : {
+
+    },
+    "Limit charging" : {
+
+    },
+    "Line accent" : {
+
+    },
+    "Lost" : {
+
+    },
+    "Max" : {
+
+    },
+    "Max %@" : {
+
+    },
+    "Memory" : {
+
+    },
+    "Memory pressure is critical" : {
+
+    },
+    "Memory pressure is elevated" : {
+
+    },
+    "Memory use %@ percent" : {
+
+    },
+    "Min" : {
+
+    },
+    "Min %@" : {
+
+    },
+    "Mini bar" : {
+
+    },
+    "Mini gauge" : {
+
+    },
+    "Modules in the menu bar are independent. CPU and Memory are on to start with. Everything else is in Widgets." : {
+
+    },
+    "Monitoring works right now, with no special access and no network." : {
+
+    },
+    "Move %@ left" : {
+
+    },
+    "Move %@ right" : {
+
+    },
+    "N/A" : {
+
+    },
+    "Name" : {
+
+    },
+    "Needs re-pin after a rebuild" : {
+
+    },
+    "No room in the menu bar for: %@. Turn some modules off, or combine them." : {
+
+    },
+    "None" : {
+
+    },
+    "Normal" : {
+
+    },
+    "Not charging" : {
+
+    },
+    "Not installed" : {
+
+    },
+    "Not responding" : {
+
+    },
+    "Notifications" : {
+
+    },
+    "Now" : {
+
+    },
+    "Off" : {
+
+    },
+    "On battery" : {
+
+    },
+    "Open jMacosTweaker" : {
+
+    },
+    "Open the copy in /Applications to use control." : {
+
+    },
+    "Open window" : {
+
+    },
+    "Options for %@" : {
+
+    },
+    "Other" : {
+
+    },
+    "Outdated" : {
+
+    },
+    "PWR" : {
+
+    },
+    "Pause when battery is hot" : {
+
+    },
+    "Per-core load, %lld cores" : {
+
+    },
+    "Performance" : {
+
+    },
+    "Performance cores" : {
+
+    },
+    "Pin %@ to the menu bar" : {
+
+    },
+    "Pink" : {
+
+    },
+    "Pinned sensor" : {
+
+    },
+    "Power" : {
+
+    },
+    "Power flow" : {
+
+    },
+    "Pressure" : {
+
+    },
+    "Privileged helper" : {
+
+    },
+    "Quit" : {
+
+    },
+    "Quit jMacosTweaker" : {
+
+    },
+    "RAM" : {
+
+    },
+    "Rated" : {
+
+    },
+    "Renderer" : {
+
+    },
+    "Renderer %lld%%" : {
+
+    },
+    "Restore defaults" : {
+
+    },
+    "Restore defaults and prepare uninstall" : {
+
+    },
+    "Restore system defaults" : {
+
+    },
+    "Resume below limit by" : {
+
+    },
+    "Returns fans and charging to system control" : {
+
+    },
+    "Running" : {
+
+    },
+    "Running hot: %@" : {
+
+    },
+    "SSD" : {
+
+    },
+    "Same setting for all fans" : {
+
+    },
+    "Saved" : {
+
+    },
+    "Search" : {
+
+    },
+    "Sensors" : {
+
+    },
+    "Settings" : {
+
+    },
+    "Settings file" : {
+
+    },
+    "Show" : {
+
+    },
+    "Show helper setup" : {
+
+    },
+    "Show this sensor in the Temperature menu bar module" : {
+
+    },
+    "Silent" : {
+
+    },
+    "Small label" : {
+
+    },
+    "SoC" : {
+
+    },
+    "Sparkline" : {
+
+    },
+    "Speed" : {
+
+    },
+    "Start with monitoring" : {
+
+    },
+    "State" : {
+
+    },
+    "Stopped fans are normal: macOS can turn them off at low load." : {
+
+    },
+    "Style" : {
+
+    },
+    "Swap" : {
+
+    },
+    "Switch by power source" : {
+
+    },
+    "System" : {
+
+    },
+    "System load" : {
+
+    },
+    "System power %@" : {
+
+    },
+    "TEMP" : {
+
+    },
+    "Target %@" : {
+
+    },
+    "Teal" : {
+
+    },
+    "Temperature" : {
+
+    },
+    "Temperature unit" : {
+
+    },
+    "Text" : {
+
+    },
+    "The background helper of %@ is running and can change charging, even with its app closed. Stop it to use the charge limit here: sudo launchctl bootout system/%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The background helper of %1$@ is running and can change charging, even with its app closed. Stop it to use the charge limit here: sudo launchctl bootout system/%2$@"
+          }
+        }
+      }
+    },
+    "The background helper of %@ is running and can write the same fan settings, even with its app closed. Stop it to use fan control here: sudo launchctl bootout system/%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The background helper of %1$@ is running and can write the same fan settings, even with its app closed. Stop it to use fan control here: sudo launchctl bootout system/%2$@"
+          }
+        }
+      }
+    },
+    "The helper is not responding." : {
+
+    },
+    "The helper is outdated. Run the install script again." : {
+
+    },
+    "The sensors that matter. Groups come from load tests on real hardware, not from Apple." : {
+
+    },
+    "Theme" : {
+
+    },
+    "Thermal protection active: %@" : {
+
+    },
+    "This build is new, so the helper refuses it until you run the install script again." : {
+
+    },
+    "This macOS has no built-in charge limit, and no verified way to set one on this Mac." : {
+
+    },
+    "Tiler" : {
+
+    },
+    "To battery" : {
+
+    },
+    "To system" : {
+
+    },
+    "Top up to 100%" : {
+
+    },
+    "Turn on only what you want to see. Modules that are off use no resources." : {
+
+    },
+    "Unpin %@" : {
+
+    },
+    "Update every" : {
+
+    },
+    "Use hottest" : {
+
+    },
+    "Used" : {
+
+    },
+    "User" : {
+
+    },
+    "Violet" : {
+
+    },
+    "Voltage" : {
+
+    },
+    "Voltage, current and power" : {
+
+    },
+    "Warning" : {
+
+    },
+    "Warning color at" : {
+
+    },
+    "Welcome to jMacosTweaker" : {
+
+    },
+    "While charging" : {
+
+    },
+    "Widgets" : {
+
+    },
+    "Wired" : {
+
+    },
+    "jMacosTweaker" : {
+
+    },
+    "macOS did not accept this limit. You can change it in System Settings, under Battery." : {
+
+    },
+    "macOS is holding charge right now. Optimized Battery Charging or a limit in System Settings works on its own and can stop charging below your limit." : {
+
+    }
+  },
+  "version" : "1.0"
+}

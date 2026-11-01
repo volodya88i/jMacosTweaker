@@ -1,0 +1,127 @@
+name: jMacosTweaker
+options:
+  bundleIdPrefix: com.jmacostweaker
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+settings:
+  configs:
+    Release:
+      CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ARCHS: "$(ARCHS_STANDARD)"
+    ONLY_ACTIVE_ARCH: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    OTHER_CODE_SIGN_FLAGS: "--options=runtime"
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_DEBUG_DYLIB: NO
+    ENABLE_PREVIEWS: NO
+    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+targets:
+  Shared:
+    type: library.static
+    platform: macOS
+    sources: [Shared]
+  Core:
+    type: library.static
+    platform: macOS
+    sources: [Core]
+    dependencies:
+      - target: Shared
+  HelperCore:
+    type: library.static
+    platform: macOS
+    sources: [HelperCore]
+    dependencies:
+      - target: Shared
+      - target: Core
+  PrivilegedHelper:
+    type: tool
+    platform: macOS
+    sources: [PrivilegedHelper]
+    settings:
+      base:
+        PRODUCT_NAME: jmacostweaker-helper
+        PRODUCT_BUNDLE_IDENTIFIER: com.jmacostweaker.helper
+        SKIP_INSTALL: YES
+    dependencies:
+      - target: Shared
+      - target: Core
+      - target: HelperCore
+  App:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+      - path: tools/install_helper.sh
+        buildPhase: resources
+      - path: tools/uninstall_helper.sh
+        buildPhase: resources
+      - path: tools/com.jmacostweaker.helper.plist
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: jMacosTweaker
+        PRODUCT_BUNDLE_IDENTIFIER: com.jmacostweaker.app
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_CFBundleDisplayName: jMacosTweaker
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: "MIT with Commons Clause"
+        ENABLE_APP_SANDBOX: NO
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: Shared
+      - target: Core
+      - target: PrivilegedHelper
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+  CoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/CoreTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: Shared
+      - target: Core
+  HelperTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests/HelperTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_HARDENED_RUNTIME: NO
+    dependencies:
+      - target: Shared
+      - target: Core
+      - target: HelperCore
+schemes:
+  jMacosTweaker:
+    build:
+      targets:
+        App: all
+        PrivilegedHelper: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [CoreTests, HelperTests]

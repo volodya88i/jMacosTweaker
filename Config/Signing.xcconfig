@@ -1,0 +1,8 @@
+// Signing identity. "-" is ad-hoc and needs no certificate.
+// To use a free Apple Development certificate, set it in Config/Signing.local.xcconfig, which git ignores:
+//   CODE_SIGN_IDENTITY = Apple Development
+//   DEVELOPMENT_TEAM = YOURTEAMID
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_STYLE = Manual
+DEVELOPMENT_TEAM =
+#include? "Signing.local.xcconfig"

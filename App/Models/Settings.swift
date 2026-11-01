@@ -1,0 +1,304 @@
+import Core
+import Foundation
+import Observation
+import Shared
+
+struct FanSettings: Codable, Hashable, Sendable {
+    var preset = FanPreset.system
+    var constantPercent = 0.0
+    var customCurve = FanPreset.balanced.curve ?? FanCurve(points: [])
+    var sensor = ControlSensor.hottest
+    var linked = true
+    var perFan: [Int: FanPreset] = [:]
+    var switchByPowerSource = false
+    var presetOnAdapter = FanPreset.system
+    var presetOnBattery = FanPreset.system
+    var saved: [NamedPreset] = []
+}
+
+enum AccentChoice: Codable, Hashable, Sendable, CaseIterable {
+    case none, blue, violet, teal, green, pink
+    case custom(UInt32)
+
+    /// The presets. Custom is offered separately through a color well.
+    static let allCases: [AccentChoice] = [.none, .blue, .violet, .teal, .green, .pink]
+
+    var title: String {
+        switch self {
+        case .none: String(localized: "None")
+        case .blue: String(localized: "Blue")
+        case .violet: String(localized: "Violet")
+        case .teal: String(localized: "Teal")
+        case .green: String(localized: "Green")
+        case .pink: String(localized: "Pink")
+        case .custom: String(localized: "Custom")
+        }
+    }
+}
+
+enum AppearanceChoice: String, Codable, CaseIterable, Sendable {
+    case system, dark, light
+
+    var title: String {
+        switch self {
+        case .system: String(localized: "System")
+        case .dark: String(localized: "Dark")
+        case .light: String(localized: "Light")
+        }
+    }
+}
+
+enum TemperatureUnit: String, Codable, CaseIterable, Sendable {
+    case celsius, fahrenheit
+
+    var title: String { self == .celsius ? "°C" : "°F" }
+}
+
+enum Module: String, Codable, CaseIterable, Identifiable, Sendable {
+    case cpu, memory, gpu, temperature, fans, battery, power, network, disk
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cpu: String(localized: "CPU")
+        case .memory: String(localized: "Memory")
+        case .gpu: String(localized: "GPU")
+        case .temperature: String(localized: "Temperature")
+        case .fans: String(localized: "Fans")
+        case .battery: String(localized: "Battery")
+        case .power: String(localized: "Power")
+        case .network: String(localized: "Network")
+        case .disk: String(localized: "Disk")
+        }
+    }
+
+    /// The tiny label in the menu bar.
+    var shortLabel: String {
+        switch self {
+        case .cpu: String(localized: "CPU")
+        case .memory: String(localized: "RAM")
+        case .gpu: String(localized: "GPU")
+        case .temperature: String(localized: "TEMP")
+        case .fans: String(localized: "FAN")
+        case .battery: String(localized: "BAT")
+        case .power: String(localized: "PWR")
+        case .network: String(localized: "NET")
+        case .disk: String(localized: "DISK")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .cpu: "cpu"
+        case .memory: "memorychip"
+        case .gpu: "square.stack.3d.up"
+        case .temperature: "thermometer.medium"
+        case .fans: "fan"
+        case .battery: "battery.75percent"
+        case .power: "bolt"
+        case .network: "network"
+        case .disk: "internaldrive"
+        }
+    }
+
+    var sources: Set<SampleSource> {
+        switch self {
+        case .cpu: [.cpu]
+        case .memory: [.memory]
+        case .gpu: [.gpu]
+        case .temperature: [.temperatureSummary]
+        case .fans: [.fans]
+        case .battery: [.battery]
+        case .power: [.battery, .power]
+        case .network: [.network]
+        case .disk: [.disk]
+        }
+    }
+
+    /// The unit of thresholds and visibility values. Temperature is stored in °C and converted for display.
+    var thresholdUnit: String {
+        switch self {
+        case .cpu, .memory, .gpu, .battery: "%"
+        case .temperature: "°"
+        case .fans: "rpm"
+        case .power: "W"
+        case .network, .disk: "MB/s"
+        }
+    }
+
+    var allowedStyles: [WidgetStyle] {
+        switch self {
+        case .cpu, .memory, .gpu, .battery: WidgetStyle.allCases
+        case .temperature, .fans: [.text, .iconValue, .sparkline, .bar, .gauge]
+        case .power, .network, .disk: [.text, .iconValue, .sparkline]
+        }
+    }
+
+    /// Default interval. Battery changes slowly and also gets OS notifications.
+    var defaultInterval: TimeInterval {
+        self == .battery ? 30 : 5
+    }
+}
+
+enum WidgetStyle: String, Codable, CaseIterable, Sendable {
+    case text, iconValue, bar, sparkline, gauge
+
+    var title: String {
+        switch self {
+        case .text: String(localized: "Text")
+        case .iconValue: String(localized: "Icon and value")
+        case .bar: String(localized: "Mini bar")
+        case .sparkline: String(localized: "Sparkline")
+        case .gauge: String(localized: "Mini gauge")
+        }
+    }
+}
+
+enum VisibilityRule: Codable, Hashable, Sendable {
+    case always
+    /// Shown only at or above this value, in the module's own unit.
+    case above(Double)
+    case below(Double)
+    case whileCharging
+    case onBattery
+}
+
+struct WidgetConfig: Codable, Hashable, Identifiable, Sendable {
+    var module: Module
+    var enabled: Bool
+    var style: WidgetStyle = .text
+    var interval: TimeInterval
+    /// Value at which the widget turns the warning or critical color. For Battery, lower is worse.
+    var warningAt: Double?
+    var criticalAt: Double?
+    var visibility: VisibilityRule = .always
+    /// Temperature module only: a pinned sensor. Nil shows the hottest.
+    var pinnedSensor: SensorID?
+    var showsLabel = true
+
+    var id: Module { module }
+
+    static func standard(_ module: Module) -> WidgetConfig {
+        var config = WidgetConfig(module: module, enabled: module == .cpu || module == .memory, interval: module.defaultInterval)
+        switch module {
+        case .temperature:
+            config.warningAt = 85
+            config.criticalAt = 95
+        case .battery:
+            config.warningAt = 20
+            config.criticalAt = 10
+        default:
+            break
+        }
+        return config
+    }
+}
+
+/// User settings, stored as one JSON document in defaults so schema changes stay in one place.
+@MainActor
+@Observable
+final class AppSettings {
+    struct Stored: Codable, Sendable {
+        var schema = 1
+        var accent = AccentChoice.none
+        var accentDividers = false
+        var appearance = AppearanceChoice.system
+        var temperatureUnit = TemperatureUnit.celsius
+        var widgets = Module.allCases.map(WidgetConfig.standard)
+        var combined = false
+        var notifyHighTemperature = false
+        var highTemperatureAt = 95.0
+        var notifyChargeLimit = false
+        var hasCompletedOnboarding = false
+        var fan = FanSettings()
+        var charge = ChargeRequest.off
+
+        init() {}
+
+        /// Missing fields keep their defaults, so a file from an older version still loads.
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            func value<Value: Decodable>(_ key: CodingKeys, _ fallback: Value) -> Value {
+                (try? container.decodeIfPresent(Value.self, forKey: key)) ?? fallback
+            }
+            let base = Stored()
+            schema = value(.schema, base.schema)
+            accent = value(.accent, base.accent)
+            accentDividers = value(.accentDividers, base.accentDividers)
+            appearance = value(.appearance, base.appearance)
+            temperatureUnit = value(.temperatureUnit, base.temperatureUnit)
+            widgets = value(.widgets, base.widgets)
+            combined = value(.combined, base.combined)
+            notifyHighTemperature = value(.notifyHighTemperature, base.notifyHighTemperature)
+            highTemperatureAt = value(.highTemperatureAt, base.highTemperatureAt)
+            notifyChargeLimit = value(.notifyChargeLimit, base.notifyChargeLimit)
+            hasCompletedOnboarding = value(.hasCompletedOnboarding, base.hasCompletedOnboarding)
+            fan = value(.fan, base.fan)
+            charge = value(.charge, base.charge)
+        }
+    }
+
+    private static let key = "settings.v1"
+    private let defaults: UserDefaults
+
+    var stored: Stored {
+        didSet { save() }
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: Self.key), let decoded = try? JSONDecoder().decode(Stored.self, from: data) {
+            stored = Self.normalized(decoded)
+        } else {
+            stored = Stored()
+        }
+    }
+
+    /// Adds modules introduced after the file was written, and drops duplicates.
+    static func normalized(_ value: Stored) -> Stored {
+        var result = value
+        var seen = Set<Module>()
+        result.widgets = value.widgets.filter { seen.insert($0.module).inserted }
+        for module in Module.allCases where !seen.contains(module) {
+            var config = WidgetConfig.standard(module)
+            config.enabled = false
+            result.widgets.append(config)
+        }
+        return result
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: Self.key)
+        }
+    }
+
+    func updateWidget(_ module: Module, _ change: (inout WidgetConfig) -> Void) {
+        guard let index = stored.widgets.firstIndex(where: { $0.module == module }) else { return }
+        change(&stored.widgets[index])
+    }
+
+    func widget(_ module: Module) -> WidgetConfig {
+        stored.widgets.first { $0.module == module } ?? .standard(module)
+    }
+
+    func moveWidget(_ module: Module, by offset: Int) {
+        guard let index = stored.widgets.firstIndex(where: { $0.module == module }) else { return }
+        let target = index + offset
+        guard stored.widgets.indices.contains(target) else { return }
+        stored.widgets.swapAt(index, target)
+    }
+
+    func exportData() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(stored)
+    }
+
+    func importData(_ data: Data) -> Bool {
+        guard let decoded = try? JSONDecoder().decode(Stored.self, from: data), decoded.schema == 1 else { return false }
+        stored = Self.normalized(decoded)
+        return true
+    }
+}
