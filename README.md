@@ -44,6 +44,8 @@ No telemetry. No network calls.
    xattr -dr com.apple.quarantine /Applications/jMacosTweaker.app
    ```
 
+   If it says `Permission denied`, the helper was installed before. Put `sudo` in front of the command.
+
 4. Open the app. It lives in the menu bar and has no Dock icon.
 
 Monitoring and the charge limit work right away. Fan control needs the [helper](#the-privileged-helper), and Settings shows
@@ -136,6 +138,30 @@ which sensors respond to CPU and GPU load, and the raw key stays visible in each
 - After a restart, fan control can take a little while to become available, because macOS starts the helper along with
   its other daemons. Fans stay under system control until then.
 - VoiceOver and the helper refusing a wrong client have not been checked on hardware.
+
+## Removing leftovers from other tools
+
+Deleting a fan or battery app does not remove its background helper. That helper runs as root and can write the same
+settings even with the app gone, so jMacosTweaker may warn about it or keep fan control off.
+
+If you still have the other app, use its own uninstaller first. Otherwise, remove the helper with these commands, using the
+label from the table:
+
+```bash
+LABEL=com.crystalidea.macsfancontrol.smcwrite
+sudo launchctl bootout system/$LABEL
+sudo rm /Library/LaunchDaemons/$LABEL.plist
+sudo rm /Library/PrivilegedHelperTools/$LABEL
+```
+
+| Tool | Label |
+| --- | --- |
+| Macs Fan Control | `com.crystalidea.macsfancontrol.smcwrite` |
+| AlDente Pro | `com.apphousekitchen.aldente-pro.helper` |
+
+`bootout` reports an error if the helper is not loaded, which is fine. Run the `rm` lines anyway. Then reopen jMacosTweaker.
+Restart the Mac if fans or charging do not return to normal. These paths were seen on one Mac and can differ between
+versions of those tools, so check that a path exists if a command cannot find it.
 
 ## Restore and uninstall
 
