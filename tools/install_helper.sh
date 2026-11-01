@@ -65,6 +65,10 @@ chown root:wheel "$SUPPORT"
 chmod 755 "$SUPPORT"
 install -o root -g wheel -m 755 "$APP_DEST/Contents/MacOS/jmacostweaker-helper" "$HELPER_DEST"
 install -o root -g wheel -m 644 "$HERE/$LABEL.plist" "$PLIST_DEST"
+# A downloaded copy carries a quarantine flag, and install copies it. launchd then refuses the plist with an I/O error.
+# Running this script with sudo is the decision to trust this copy.
+xattr -dr com.apple.quarantine "$APP_DEST" 2>/dev/null || true
+xattr -d com.apple.quarantine "$HELPER_DEST" "$PLIST_DEST" 2>/dev/null || true
 
 CDHASH="$(codesign -dvvv "$APP_DEST" 2>&1 | sed -n 's/^CDHash=//p' | sed -n 1p)"
 [ -n "$CDHASH" ] || die "could not read the app's code hash"

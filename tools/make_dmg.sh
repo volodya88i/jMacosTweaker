@@ -21,6 +21,8 @@ cat > "$STAGE/Install.txt" <<'NOTES'
 
    xattr -dr com.apple.quarantine /Applications/jMacosTweaker.app
 
+   If it says Permission denied, the helper was installed before. Put sudo in front of the command.
+
 3. Open jMacosTweaker. It lives in the menu bar and has no Dock icon.
 
 Fan control needs a small helper. Settings shows the command to install it.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-11-01
+
+- README: how to remove helpers left behind by other fan and battery tools.
+- Fixed: the helper would not load from a downloaded copy if its quarantine flag was still set.
+
 ## 0.1.0 - 2026-11-01
 
 First public release.
