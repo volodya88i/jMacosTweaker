@@ -3,11 +3,11 @@
 A native macOS menu bar utility for monitoring, fan control and battery charge limiting. It is restrained, light on
 the machine, and designed to fail safe.
 
-![Dashboard](screenshots/dashboard.png)
+![Overview](screenshots/dashboard.png)
 
-| Sensors | Battery | Modules |
+| Fans | Sensors | Menu bar |
 | --- | --- | --- |
-| ![Sensors](screenshots/sensors.png) | ![Battery](screenshots/battery.png) | ![Modules](screenshots/widgets.png) |
+| ![Fans](screenshots/fans.png) | ![Sensors](screenshots/sensors.png) | ![Menu bar popover](screenshots/popover.png) |
 
 > **Status: early.** Monitoring works. Fan control is verified on one Mac. The charge limit uses the macOS setting, so it is limited to 80% and above. Control is **off by default** on any Mac and macOS version not listed in
 > [Compatibility](#compatibility).
@@ -25,7 +25,8 @@ the machine, and designed to fail safe.
 - **Charge limit:** 80, 85, 90, 95 or 100%, using the macOS setting. Charging stops at the limit and the Mac runs from the
   adapter, without using the battery. Needs no helper. Lower limits are not possible. See
   [Known limitations](#known-limitations).
-- **Appearance:** true black dark theme, light theme, and an optional accent color for lines.
+- **Appearance:** a native macOS look in light and dark, Liquid Glass on macOS 26 and later, and a graph color that follows
+  the system accent color or one you choose.
 
 No telemetry. No network calls.
 
@@ -36,9 +37,18 @@ No telemetry. No network calls.
 
 ## Download
 
-1. Download the `.dmg` from the [Releases](https://github.com/volodya88i/jMacosTweaker/releases) page and open it.
-2. Drag **jMacosTweaker** to **Applications**.
-3. This build is not notarized, so macOS blocks it at first. If you trust the download, run:
+Download the `.dmg` from the [Releases](https://github.com/volodya88i/jMacosTweaker/releases) page and open it.
+
+**Everything in one step (recommended).** Double-click **Install jMacosTweaker.command**. It copies the app to
+Applications, installs the [helper](#the-privileged-helper) that fan control needs, and opens the app. Terminal asks for
+your password once, for `sudo`; the app itself never asks for it. The image is not notarized, so if macOS will not open
+the installer, right-click it and choose **Open**, or allow it under **System Settings > Privacy & Security**. To update,
+run the installer from the new image again.
+
+**Monitoring only.**
+
+1. Drag **jMacosTweaker** to **Applications**.
+2. This build is not notarized, so macOS blocks it at first. If you trust the download, run:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/jMacosTweaker.app
@@ -46,10 +56,9 @@ No telemetry. No network calls.
 
    If it says `Permission denied`, the helper was installed before. Put `sudo` in front of the command.
 
-4. Open the app. It lives in the menu bar and has no Dock icon.
+3. Open the app. It lives in the menu bar and has no Dock icon.
 
-Monitoring and the charge limit work right away. Fan control needs the [helper](#the-privileged-helper), and Settings shows
-the exact command to install it.
+Monitoring and the charge limit work right away. Settings shows how to add the helper later.
 
 ## Build and run
 
@@ -165,9 +174,10 @@ versions of those tools, so check that a path exists if a command cannot find it
 
 ## Restore and uninstall
 
-**Restore system defaults** is on the Dashboard, the Fans page and each menu bar panel. To remove everything:
+**Restore System Defaults** is in the toolbar of Overview and Fans, and at the bottom of each menu bar popover. To remove
+everything:
 
-1. In Settings, choose **Restore defaults and prepare uninstall**.
+1. In Settings, under Privileged Helper, choose **Restore Defaults and Prepare Uninstall**.
 2. Run the command it shows:
 
 ```bash

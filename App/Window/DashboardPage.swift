@@ -1,6 +1,8 @@
 import Core
 import SwiftUI
 
+/// Overview: one status line that answers "is everything OK?", the four load figures, then temperatures, fans and
+/// battery.
 struct DashboardPage: View {
     let context: AppContext
 
@@ -16,278 +18,134 @@ struct DashboardPage: View {
 
     var body: some View {
         PageScroll {
-            DashboardHeader(context: context)
-            HStack(alignment: .top, spacing: 20) {
-                CPUBlock(model: store.cpu)
-                if store.availability.hasGPU { GPUBlock(model: store.gpu) }
-                MemoryBlock(model: store.memory)
-                if store.availability.hasBattery { PowerBlock(model: store.battery) }
+            StatusCard(context: context)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 14)], spacing: 14) {
+                CPUTile(model: store.cpu)
+                if store.availability.hasGPU { GPUTile(model: store.gpu) }
+                MemoryTile(model: store.memory)
+                if store.availability.hasBattery { PowerTile(model: store.battery) }
             }
-            .padding(.vertical, 20)
-            Hairline()
-            HStack(alignment: .top, spacing: 40) {
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionLabel("Temperature")
-                    TemperatureRows(context: context)
+            HStack(alignment: .top, spacing: 14) {
+                VStack(spacing: 14) {
+                    TemperatureCard(context: context)
                     if store.availability.hasFans {
-                        SectionLabel("Fans").padding(.top, 22)
-                        FanRows(model: store.fans)
+                        Card {
+                            CardHeader(symbol: "fan", title: String(localized: "Fans")) {
+                                Text(context.control.helper.status?.fansUnderControl.isEmpty == false
+                                     ? context.settings.stored.fan.preset.title : String(localized: "Auto"))
+                            }
+                            FansGrid(context: context)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity)
                 if store.availability.hasBattery {
-                    VStack(alignment: .leading, spacing: 0) {
-                        SectionLabel("Battery")
-                        BatterySummary(model: store.battery, limit: context.control.nativeChargeLimit)
-                    }
-                    .frame(maxWidth: .infinity)
+                    BatteryCard(context: context).frame(maxWidth: .infinity)
                 }
             }
-            .padding(.top, 20)
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { RestoreButton(control: context.control) }
         }
         .sampling(sources, engine: store.engine)
     }
 }
 
-private struct DashboardHeader: View {
+/// The answer to "is everything OK?", with what the app is doing right now.
+struct StatusCard: View {
     let context: AppContext
 
     var body: some View {
         let status = SystemStatus.line(store: context.store, unit: context.unit)
-        PageHeader(title: WindowSection.dashboard.title, detail: context.control.statusLine(base: status.text), detailLevel: status.level) {
-            RestoreButton(control: context.control)
+        let details = context.control.statusDetails()
+        Card {
+            HStack(spacing: 12) {
+                Image(systemName: status.level == .normal ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(status.level == .normal ? .green : LevelColor.color(status.level, fallback: .green))
+                    .symbolRenderingMode(.hierarchical)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.text).font(.title3.weight(.semibold))
+                    Text(details.isEmpty ? String(localized: "Fans and charging are under system control.") : details.joined(separator: " · "))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 0)
+            }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 
-private struct MetricBlock: View {
-    let title: String
-    let value: String
-    let unit: String
-    let detail: String
-    let history: History
-    var maximum: Float? = 100
-    var alt: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).foregroundStyle(Color.tkSecondary)
-            BigNumber(value: value, unit: unit)
-            Text(detail).font(.system(size: 12)).foregroundStyle(Color.tkSecondary).lineLimit(1)
-            Sparkline(history: history, maximum: maximum).padding(.top, 6)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(alt)
-    }
-}
-
-private func wholePercent(_ fraction: Double?) -> String {
-    fraction.map { "\(Int(($0 * 100).rounded()))" } ?? "–"
-}
-
-private struct CPUBlock: View {
+private struct CPUTile: View {
     let model: CPUModel
 
     var body: some View {
         let current = model.current
-        MetricBlock(
+        MetricTile(
+            symbol: "cpu",
             title: String(localized: "CPU"),
             value: wholePercent(current?.usage),
-            unit: "%",
-            detail: current.map { String(localized: "\(Int(($0.system * 100).rounded())) system · \(Int(($0.user * 100).rounded())) user") } ?? " ",
+            detail: current.map { String(localized: "\(Int(($0.user * 100).rounded()))% user · \(Int(($0.system * 100).rounded()))% system") } ?? " ",
             history: model.history,
-            alt: String(localized: "CPU load \(wholePercent(current?.usage)) percent")
+            accessibility: String(localized: "CPU load \(wholePercent(current?.usage)) percent")
         )
     }
 }
 
-private struct GPUBlock: View {
+private struct GPUTile: View {
     let model: GPUModel
 
     var body: some View {
         let current = model.current
-        MetricBlock(
+        MetricTile(
+            symbol: "square.stack.3d.up",
             title: String(localized: "GPU"),
             value: wholePercent(current?.device),
-            unit: "%",
             detail: current?.renderer.map { String(localized: "Renderer \(Int(($0 * 100).rounded()))%") } ?? " ",
             history: model.history,
-            alt: String(localized: "GPU load \(wholePercent(current?.device)) percent")
+            accessibility: String(localized: "GPU load \(wholePercent(current?.device)) percent")
         )
     }
 }
 
-private struct MemoryBlock: View {
+private struct MemoryTile: View {
     let model: MemoryModel
 
     var body: some View {
         let current = model.current
-        MetricBlock(
+        let level: ValueLevel = switch current?.pressure {
+        case .warning: .warning
+        case .critical: .critical
+        default: .normal
+        }
+        MetricTile(
+            symbol: "memorychip",
             title: String(localized: "Memory"),
             value: wholePercent(current?.usage),
-            unit: "%",
             detail: current.map { String(localized: "\(Format.gigabytes($0.used)) of \(Format.gigabytes($0.total)) GB · \($0.pressure.title)") } ?? " ",
             history: model.history,
-            alt: String(localized: "Memory use \(wholePercent(current?.usage)) percent")
+            level: level,
+            accessibility: String(localized: "Memory use \(wholePercent(current?.usage)) percent")
         )
     }
 }
 
-private struct PowerBlock: View {
+private struct PowerTile: View {
     let model: BatteryModel
 
     var body: some View {
         let watts = model.flow?.systemWatts
-        MetricBlock(
+        MetricTile(
+            symbol: "bolt",
             title: String(localized: "Power"),
             value: watts.map { String(format: "%.1f", $0) } ?? "–",
             unit: "W",
             detail: String(localized: "System load"),
             history: model.powerHistory,
             maximum: nil,
-            alt: String(localized: "System power \(Format.watts(watts))")
+            accessibility: String(localized: "System power \(Format.watts(watts))")
         )
-    }
-}
-
-struct TemperatureRows: View {
-    let context: AppContext
-
-    var body: some View {
-        let summary = context.store.sensors.summary
-        let rows: [(String, Double?)] = [
-            (String(localized: "CPU hottest"), summary?.cpuHottest),
-            (String(localized: "GPU"), summary?.gpu),
-            (String(localized: "SSD"), summary?.ssd),
-            (String(localized: "Battery"), summary?.battery)
-        ]
-        ForEach(rows.filter { $0.1 != nil }, id: \.0) { row in
-            TemperatureRow(title: row.0, celsius: row.1 ?? 0, unit: context.unit)
-        }
-    }
-}
-
-private struct TemperatureRow: View {
-    let title: String
-    let celsius: Double
-    let unit: TemperatureUnit
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Hairline()
-            HStack(spacing: 12) {
-                Text(title).frame(width: 96, alignment: .leading)
-                MeterBar(fraction: celsius / 100, color: celsius >= SystemStatus.hotCelsius ? .tkCritical : nil)
-                Text(Format.temperature(celsius, unit: unit))
-                    .monospacedDigit()
-                    .frame(width: 44, alignment: .trailing)
-            }
-            .frame(height: Tokens.Size.windowRow - 1)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-struct FanRows: View {
-    let model: FansModel
-    var height = Tokens.Size.windowRow
-
-    var body: some View {
-        ForEach(model.current, id: \.index) { fan in
-            ValueRow(String(localized: "Fan \(fan.index + 1)"), value: Format.fanSpeed(fan.actualRPM), height: height)
-        }
-    }
-}
-
-struct BatterySummary: View {
-    let model: BatteryModel
-    var limit: Int?
-
-    var body: some View {
-        if let battery = model.current {
-            VStack(alignment: .leading, spacing: 0) {
-                Hairline()
-                HStack(alignment: .firstTextBaseline) {
-                    BigNumber(value: "\(battery.percent)", unit: "%")
-                    Spacer()
-                    Text(BatteryText.detail(battery, limit: limit, flow: model.flow)).foregroundStyle(Color.tkSecondary)
-                }
-                .padding(.top, 14)
-                MeterBar(fraction: Double(battery.percent) / 100, height: 6, marker: limit.map { Double($0) / 100 })
-                    .padding(.top, 14)
-                    .padding(.bottom, 18)
-                PowerFlowRows(flow: model.flow ?? battery.flow)
-                AccessoryRows(model: model)
-                if let health = battery.health {
-                    ValueRow(String(localized: "Capacity vs design"), value: Format.percent(health), secondary: true)
-                }
-                if let cycles = battery.cycleCount {
-                    ValueRow(String(localized: "Cycles"), value: "\(cycles)", secondary: true)
-                }
-            }
-            .accessibilityElement(children: .contain)
-        }
-    }
-}
-
-enum BatteryText {
-    static func detail(_ battery: BatterySnapshot, limit: Int? = nil, flow: PowerFlow? = nil) -> String {
-        if battery.state == .charging, let limit, limit < 100, let minutes = LivePowerMath.minutesToLimit(
-            percent: battery.percent, limit: limit, fullCapacityMilliampHours: battery.fullChargeCapacity,
-            volts: battery.voltage, batteryWatts: flow?.chargingWatts
-        ) {
-            return String(localized: "About \(Format.duration(minutes: minutes)) to \(limit)%")
-        }
-        switch battery.state {
-        case .charging:
-            return battery.minutesToFull.map { String(localized: "Charging · \(Format.duration(minutes: $0)) to full") } ?? battery.state.title
-        case .discharging:
-            return battery.minutesToEmpty.map { String(localized: "\(Format.duration(minutes: $0)) remaining") } ?? battery.state.title
-        case .notCharging:
-            return battery.fullyCharged ? String(localized: "Fully charged") : battery.state.title
-        }
-    }
-}
-
-/// Devices the Mac is powering, each with its live draw. They are part of system load, so the Mac's own share is shown too.
-struct AccessoryRows: View {
-    let model: BatteryModel
-    var height = Tokens.Size.windowRow
-
-    var body: some View {
-        if !model.accessories.isEmpty {
-            ForEach(model.accessories) { accessory in
-                ValueRow(accessory.name.map { String(localized: "\($0), port \(accessory.port)") } ?? String(localized: "Accessory, port \(accessory.port)"), value: Format.watts(accessory.watts), height: height)
-            }
-            if let mac = model.macWatts {
-                ValueRow(String(localized: "Mac itself"), value: Format.watts(mac), secondary: true, height: height)
-            }
-        }
-    }
-}
-
-struct PowerFlowRows: View {
-    let flow: PowerFlow
-    var height = Tokens.Size.windowRow
-
-    var body: some View {
-        switch flow {
-        case let .onBattery(system):
-            ValueRow(String(localized: "From battery"), value: Format.watts(system), height: height)
-        case let .adapterCharging(adapter, system, battery):
-            ValueRow(String(localized: "Adapter in"), value: Format.watts(adapter), height: height)
-            ValueRow(String(localized: "To system"), value: Format.watts(system), height: height)
-            ValueRow(String(localized: "To battery"), value: Format.watts(battery), height: height)
-        case let .adapterOnly(adapter, system):
-            ValueRow(String(localized: "Adapter in"), value: Format.watts(adapter), height: height)
-            ValueRow(String(localized: "To system"), value: Format.watts(system), height: height)
-        case let .batteryAssist(adapter, system, battery):
-            ValueRow(String(localized: "Adapter in"), value: Format.watts(adapter), height: height)
-            ValueRow(String(localized: "Battery assists"), value: Format.watts(battery), height: height)
-            ValueRow(String(localized: "To system"), value: Format.watts(system), height: height)
-        case .inconsistent:
-            ValueRow(String(localized: "Power flow"), value: String(localized: "N/A"), secondary: true, height: height)
-        }
     }
 }

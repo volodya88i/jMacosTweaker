@@ -1,24 +1,25 @@
 import SwiftUI
 
+/// The main window: a native sidebar and one page. On macOS 26 and later the sidebar and toolbar are Liquid Glass by
+/// themselves, because both are stock components.
 struct RootView: View {
     let context: AppContext
 
     var body: some View {
         @Bindable var context = context
-        HStack(spacing: 0) {
-            Sidebar(selection: $context.section, context: context)
-            VerticalHairline()
+        NavigationSplitView {
+            Sidebar(context: context, selection: $context.section)
+                .navigationSplitViewColumnWidth(min: 190, ideal: 212, max: 280)
+        } detail: {
             page
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .font(.system(size: 13))
-        .foregroundStyle(Color.tkPrimary)
-        .background(Color.tkBackground)
-        .environment(\.lineStyle, LineStyle(accent: context.settings.stored.accent, accentDividers: context.settings.stored.accentDividers))
-        .overlay {
-            if !context.settings.stored.hasCompletedOnboarding, !CommandLine.arguments.contains("--snapshots") {
-                OnboardingView(context: context)
-            }
+        .environment(\.dataTint, context.dataTint)
+        .sheet(isPresented: Binding(
+            get: { !context.settings.stored.hasCompletedOnboarding && !CommandLine.arguments.contains("--snapshots") },
+            set: { if !$0 { context.settings.stored.hasCompletedOnboarding = true } }
+        )) {
+            OnboardingView(context: context)
         }
     }
 
@@ -36,90 +37,85 @@ struct RootView: View {
 }
 
 private struct Sidebar: View {
-    @Binding var selection: WindowSection
     let context: AppContext
-
-    private var sections: [WindowSection] {
-        WindowSection.allCases.filter { section in
-            switch section {
-            case .fans: context.store.availability.hasFans
-            case .battery: context.store.availability.hasBattery
-            default: true
-            }
-        }
-    }
+    @Binding var selection: WindowSection
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(sections) { section in
-                Button {
-                    selection = section
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: section.symbol).frame(width: 16)
-                        Text(section.title)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 8)
-                    .frame(height: 32)
-                    .foregroundStyle(selection == section ? Color.tkPrimary : Color.tkSecondary)
-                    .background(selection == section ? Color.tkSelection : .clear)
-                    .clipShape(RoundedRectangle(cornerRadius: Tokens.Size.controlRadius))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selection == section ? .isSelected : [])
+        List(selection: Binding(get: { selection }, set: { if let value = $0 { selection = value } })) {
+            Section(String(localized: "Monitoring")) { rows(WindowSection.monitoring) }
+            if WindowSection.control.contains(where: context.isAvailable) {
+                Section(String(localized: "Control")) { rows(WindowSection.control) }
             }
-            Spacer()
+            Section(String(localized: "App")) { rows(WindowSection.app) }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 44)
-        .frame(width: Tokens.Size.sidebarWidth)
+        .listStyle(.sidebar)
+    }
+
+    private func rows(_ sections: [WindowSection]) -> some View {
+        ForEach(sections.filter(context.isAvailable)) { section in
+            Label {
+                Text(section.title)
+            } icon: {
+                SettingsIcon(symbol: section.symbol, color: section.tint)
+            }
+            .tag(section)
+        }
     }
 }
 
-/// Page header: title, one status line, optional trailing control, then a hairline.
-struct PageHeader<Trailing: View>: View {
-    let title: String
-    var detail: String?
-    var detailLevel = ValueLevel.normal
-    @ViewBuilder let trailing: Trailing
+/// First run: what works now, what needs the helper, and that the app never asks for a password.
+struct OnboardingView: View {
+    let context: AppContext
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text(title).font(.system(size: 15, weight: .semibold))
-                if let detail {
-                    Text(detail).foregroundStyle(LevelColor.color(detailLevel, fallback: .tkSecondary))
+        VStack(spacing: 18) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 72, height: 72)
+                .accessibilityHidden(true)
+            Text("Welcome to jMacosTweaker")
+                .font(.title2.weight(.semibold))
+            VStack(alignment: .leading, spacing: 14) {
+                feature("chart.xyaxis.line", .blue, String(localized: "Monitoring works right away"),
+                        String(localized: "Temperatures, fans, load and power, with no special access and no network."))
+                feature("fan.fill", .cyan, String(localized: "Fan control needs a small helper"),
+                        String(localized: "It changes hardware settings, so it runs as root. You install it with one Terminal command and can remove it the same way. The app never asks for your password."))
+                feature("menubar.rectangle", .indigo, String(localized: "You choose the menu bar"),
+                        String(localized: "CPU and Memory are on to start with. Everything else is under Menu Bar."))
+            }
+            .frame(maxWidth: 380)
+            HStack {
+                Button(String(localized: "Set Up Helper…")) {
+                    context.settings.stored.hasCompletedOnboarding = true
+                    context.section = .settings
+                    dismiss()
                 }
+                .glassButton()
                 Spacer()
-                trailing
+                Button(String(localized: "Continue")) {
+                    context.settings.stored.hasCompletedOnboarding = true
+                    dismiss()
+                }
+                .glassProminentButton()
+                .keyboardShortcut(.defaultAction)
             }
-            .padding(.bottom, 16)
-            Hairline()
+            .controlSize(.large)
         }
-        .padding(.top, 16)
+        .padding(28)
+        .frame(width: 460)
     }
-}
 
-extension PageHeader where Trailing == EmptyView {
-    init(title: String, detail: String? = nil) {
-        self.init(title: title, detail: detail) { EmptyView() }
-    }
-}
-
-/// Scrolling page body with the standard margins.
-struct PageScroll<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                content
+    private func feature(_ symbol: String, _ color: Color, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title2)
+                .foregroundStyle(color)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 28)
-            .padding(.bottom, 28)
         }
-        .scrollIndicators(.automatic)
     }
 }

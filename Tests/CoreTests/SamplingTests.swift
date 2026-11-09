@@ -233,6 +233,99 @@ final class SensorCatalogTests: XCTestCase {
         XCTAssertTrue(SensorCatalog.isPlausible(-0.6, kind: .current))
     }
 
+    /// Placeholder values recorded on Mac16,8 with macOS 27.2: `Tp0*` cycles through them, `Ta0*` sit at 8.3 for good.
+    func testPlaceholderTemperaturesAreRejected() {
+        for placeholder in [-4.0, 0, 1.5, 2.2, 5.2, 8.3] {
+            XCTAssertFalse(SensorPlausibility.accepts(placeholder, group: .soc), "\(placeholder)")
+            XCTAssertFalse(SensorPlausibility.accepts(placeholder, group: .cpuPerformance), "\(placeholder)")
+            XCTAssertFalse(SensorPlausibility.accepts(placeholder, group: .enclosure), "\(placeholder)")
+        }
+        XCTAssertTrue(SensorPlausibility.accepts(29.4, group: .cpuPerformance))
+        XCTAssertTrue(SensorPlausibility.accepts(5, group: .battery), "a battery can be colder than any die")
+        XCTAssertFalse(SensorPlausibility.accepts(.nan, group: .battery))
+    }
+
+    func testReadingFarBelowItsGroupIsAnOutlier() {
+        let cluster = (0..<6).map { SensorPlausibility.Candidate(id: .smc(SMCKey(string: "Tp1\($0)") ?? "Tp10"), group: .cpuPerformance, value: 60 + Double($0)) }
+        let cold = SensorPlausibility.Candidate(id: .smc("Tp1z"), group: .cpuPerformance, value: 30)
+        let gpu = SensorPlausibility.Candidate(id: .smc("Tg0a"), group: .gpu, value: 30)
+        let result = SensorPlausibility.screen(cluster + [cold, gpu])
+        XCTAssertEqual(result.rejected.map(\.id), [.smc("Tp1z")])
+        XCTAssertEqual(result.accepted.count, 7, "another group's lower value is not compared with this one")
+    }
+
+    func testSmallGroupsAreNotJudgedByMedian() {
+        let pair = [
+            SensorPlausibility.Candidate(id: .smc("TB0T"), group: .battery, value: 60),
+            SensorPlausibility.Candidate(id: .smc("TB1T"), group: .battery, value: 20)
+        ]
+        XCTAssertTrue(SensorPlausibility.screen(pair).rejected.isEmpty)
+    }
+
+    /// Recorded on Mac16,8: while the P cluster is powered down, every `Tp1*` and `Tp2*` key reads exactly 40.0.
+    func testWholeClusterAtExactlyFortyIsAPlaceholder() {
+        let cluster = ["Tp1a", "Tp1b", "Tp1c", "Tp1d"].map { SensorPlausibility.Candidate(id: .smc(SMCKey(string: $0) ?? "Tp1a"), group: .cpuPerformance, value: 40) }
+        let efficiency = SensorPlausibility.Candidate(id: .smc("Te05"), group: .cpuEfficiency, value: 33.8)
+        let result = SensorPlausibility.screen(cluster + [efficiency])
+        XCTAssertEqual(result.accepted.map(\.id), [.smc("Te05")])
+        XCTAssertTrue(SensorPlausibility.accepts(40, group: .battery), "only die sensors use 40.0 as a placeholder")
+    }
+
+    /// Another Mac may use another constant. Many identical readings in one die group are a placeholder whatever the value.
+    func testManyIdenticalDieReadingsAreAPlaceholder() {
+        var candidates = (0..<5).map { SensorPlausibility.Candidate(id: .smc(SMCKey(string: "Tg0\($0)") ?? "Tg00"), group: .gpu, value: 25.5) }
+        candidates += (5..<9).map { SensorPlausibility.Candidate(id: .smc(SMCKey(string: "Tg0\($0)") ?? "Tg00"), group: .gpu, value: 30 + Double($0) * 0.37) }
+        let result = SensorPlausibility.screen(candidates)
+        XCTAssertEqual(result.accepted.count, 4)
+        XCTAssertFalse(result.accepted.contains { $0.value == 25.5 })
+        let pair = [
+            SensorPlausibility.Candidate(id: .smc("Ts00"), group: .soc, value: 32.5),
+            SensorPlausibility.Candidate(id: .smc("Ts01"), group: .soc, value: 32.5)
+        ]
+        XCTAssertEqual(SensorPlausibility.screen(pair).accepted.count, 2, "two sensors sharing a value is normal")
+    }
+
+    /// The `Tp0*` pattern recorded on Mac16,8. None of it is a temperature, so none of it reaches the caller.
+    func testPlaceholderCycleNeverReachesTheCaller() {
+        let smc = ScriptedSMC(["Tp1a": [50], "Tp1b": [51], "Tp1c": [52], "Tp1d": [53], "Tp0m": [40, 5.2, 40, 1.5, 40, 2.2, 40]])
+        let sampler = SensorSampler(smc: smc, hid: nil, clock: { 0 })
+        for _ in 0..<7 {
+            XCTAssertFalse(sampler.sampleTemperatures(full: true).contains { $0.id == .smc("Tp0m") })
+            smc.advance()
+        }
+        XCTAssertEqual(sampler.descriptors().count, 4, "a key that never showed a real value is not listed")
+    }
+
+    /// A Mac that starts idle has its GPU powered down. Its sensors must join the list once it wakes.
+    func testDormantSensorsJoinWhenTheirClusterWakes() {
+        let smc = ScriptedSMC(["Tg0a": [2.4, 2.4, 35.1], "Tg0b": [-4, -4, 35.6], "Tp1a": [40, 40, 50.2], "Te05": [33]])
+        let clock = TestClock()
+        let sampler = SensorSampler(smc: smc, hid: nil, clock: { clock.now })
+        XCTAssertEqual(sampler.descriptors().map(\.id), [.smc("Te05")])
+        smc.advance()
+        clock.now += 1
+        XCTAssertEqual(sampler.sampleTemperatures(full: false).count, 1, "not rechecked yet, and still asleep")
+        smc.advance()
+        clock.now += SensorSampler.dormantRecheck
+        let readings = sampler.sampleTemperatures(full: false)
+        XCTAssertEqual(Set(readings.map(\.id)), [.smc("Te05"), .smc("Tg0a"), .smc("Tg0b"), .smc("Tp1a")])
+        XCTAssertEqual(sampler.descriptors().count, 4)
+        XCTAssertEqual(sampler.catalogRevision, 1)
+    }
+
+    /// The first read after wake can fail for every sensor at once. That must not lose anything.
+    func testWholeGroupFailingTogetherLosesNothing() {
+        let smc = ScriptedSMC(["Tp1a": [50, 0, 0, 0, 50], "Tp1b": [51, 0, 0, 0, 51], "Tp1c": [52, 0, 0, 0, 52], "Tp1d": [53, 0, 0, 0, 53]])
+        let sampler = SensorSampler(smc: smc, hid: nil, clock: { 0 })
+        _ = sampler.descriptors()
+        for _ in 0..<4 {
+            XCTAssertTrue(sampler.sampleTemperatures(full: false).allSatisfy { $0.value >= 50 })
+            smc.advance()
+        }
+        XCTAssertEqual(sampler.descriptors().count, 4)
+        XCTAssertEqual(sampler.sampleTemperatures(full: false).count, 4)
+    }
+
     func testSummary() {
         let groups: [SensorID: SensorGroup] = [
             .smc("Tp1a"): .cpuPerformance, .smc("Te05"): .cpuEfficiency, .smc("Tg0f"): .gpu, .smc("TB0T"): .battery
@@ -290,4 +383,44 @@ final class SamplingEngineTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertGreaterThan(cpu.count, paused)
     }
+}
+
+/// SMC keys that play back a script of `flt ` values, one step per `advance()`, repeating the last value.
+private final class ScriptedSMC: SMCReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let keys: [SMCKey]
+    private let script: [SMCKey: [Double]]
+    private var step = 0
+
+    init(_ values: [String: [Double]]) {
+        let pairs = values.compactMap { name, list in SMCKey(string: name).map { ($0, list) } }
+        keys = pairs.map(\.0).sorted { $0.rawValue < $1.rawValue }
+        script = Dictionary(uniqueKeysWithValues: pairs)
+    }
+
+    func advance() { lock.withLock { step += 1 } }
+
+    func keyCount() throws(SMCError) -> Int { keys.count }
+
+    func key(at index: Int) throws(SMCError) -> SMCKey {
+        guard keys.indices.contains(index) else { throw .keyNotFound("index \(index)") }
+        return keys[index]
+    }
+
+    func info(for key: SMCKey) throws(SMCError) -> SMCKeyInfo {
+        guard script[key] != nil else { throw .keyNotFound(key.description) }
+        return SMCKeyInfo(size: 4, type: "flt ", attributes: 0x80)
+    }
+
+    func read(_ key: SMCKey) throws(SMCError) -> SMCRawValue {
+        guard let list = script[key], let last = list.last else { throw .keyNotFound(key.description) }
+        let value = Float32(lock.withLock { step < list.count ? list[step] : last })
+        let bits = value.bitPattern
+        let bytes = [UInt8(bits & 0xFF), UInt8((bits >> 8) & 0xFF), UInt8((bits >> 16) & 0xFF), UInt8(bits >> 24)]
+        return SMCRawValue(info: try info(for: key), bytes: bytes)
+    }
+}
+
+private final class TestClock: @unchecked Sendable {
+    var now: TimeInterval = 0
 }

@@ -4,8 +4,10 @@ import Foundation
 /// The one line that answers "is everything OK?". A healthy system says so plainly and quietly.
 @MainActor
 enum SystemStatus {
-    static let hotCelsius = 95.0
-    static let lowBatteryPercent = 10
+    nonisolated static let hotCelsius = 95.0
+    /// Where bars turn orange. Apple Silicon runs into the 80s under sustained load, so this is a hint, not an alarm.
+    nonisolated static let warmCelsius = 85.0
+    nonisolated static let lowBatteryPercent = 10
 
     static func line(store: MonitorStore, unit: TemperatureUnit) -> (text: String, level: ValueLevel) {
         if let hottest = store.sensors.summary?.hottest, hottest >= hotCelsius {

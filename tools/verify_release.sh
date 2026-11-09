@@ -27,7 +27,7 @@ grep -q "runtime" <<< "$HELPER_SIGNATURE" || fail "no hardened runtime on the he
 if grep -q get-task-allow <<< "$ENTITLEMENTS"; then fail "the app is debuggable"; fi
 APP_STRINGS="$(strings "$APP/Contents/MacOS/jMacosTweaker")"
 if grep -q RawSMCPort <<< "$APP_STRINGS"; then fail "the write port is linked into the app"; fi
-for file in install_helper.sh uninstall_helper.sh com.jmacostweaker.helper.plist; do
+for file in install_helper.sh uninstall_helper.sh; do
     [ -f "$APP/Contents/Resources/$file" ] || fail "$file is missing from the app"
 done
 echo "PASS: clean universal Release, zero warnings, hardened, not debuggable, helper embedded."

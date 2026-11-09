@@ -18,21 +18,38 @@ enum DebugSnapshots {
             for appearanceName in [NSAppearance.Name.darkAqua, .aqua] {
                 NSApp.appearance = NSAppearance(named: appearanceName)
                 let suffix = appearanceName == .darkAqua ? "dark" : "light"
-                for section in WindowSection.allCases {
+                for section in WindowSection.allCases where context.isAvailable(section) {
                     context.section = section
-                    await render(RootView(context: context), size: CGSize(width: 1040, height: 720), to: directory.appendingPathComponent("\(section.rawValue)-\(suffix).png"))
+                    await renderWindow(context: context, to: directory.appendingPathComponent("\(section.rawValue)-\(suffix).png"))
                 }
                 for module in Module.allCases + [nil] as [Module?] {
                     let name = module?.rawValue ?? "overview"
                     let view = PanelRoot(context: context, module: module)
-                        .frame(width: Tokens.Size.panelWidth)
-                        .background(Color.tkBackground)
+                        .background(Color(nsColor: .windowBackgroundColor))
                     await render(view, size: nil, to: directory.appendingPathComponent("panel-\(name)-\(suffix).png"))
                 }
                 renderWidgets(to: directory.appendingPathComponent("module-styles-\(suffix).png"))
             }
             NSApp.terminate(nil)
         }
+    }
+
+    /// The real window, toolbar included, captured from its frame view.
+    private static func renderWindow(context: AppContext, to url: URL) async {
+        let controller = NSHostingController(rootView: RootView(context: context))
+        controller.sceneBridgingOptions = [.toolbars]
+        let window = NSWindow(contentViewController: controller)
+        window.title = context.section.title
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.toolbarStyle = .unified
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 1080, height: 740))
+        window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
+        window.orderBack(nil)
+        try? await Task.sleep(for: .seconds(4))
+        write(window.contentView?.superview ?? controller.view, to: url)
+        window.orderOut(nil)
+        window.contentViewController = nil
     }
 
     private static func render(_ view: some View, size: CGSize?, to url: URL) async {
@@ -65,7 +82,7 @@ enum DebugSnapshots {
         let rows = stride(from: 0, to: entries.count, by: 8).map { Array(entries[$0..<min($0 + 8, entries.count)]) }
         let stack = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: rows.count * 28))
         stack.wantsLayer = true
-        stack.layer?.backgroundColor = Tokens.background.cgColor
+        stack.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         for (index, row) in rows.enumerated() {
             let view = WidgetView(frame: NSRect(x: 0, y: (rows.count - index - 1) * 28, width: 620, height: 24))
             view.entries = row

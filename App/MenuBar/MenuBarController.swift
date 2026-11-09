@@ -159,7 +159,7 @@ final class MenuBarController: NSObject {
     }
 
     private func update() {
-        let accent = settings.stored.accent == .none ? NSColor.labelColor : Tokens.accent(settings.stored.accent)
+        let accent = Tokens.menuBarAccent(settings.stored.accent)
         let shown = enabledWidgets.filter { visible.contains($0.module) }
         if settings.stored.combined, let slot = slots[Self.combinedKey] {
             apply(shown.map(entry), to: slot, accent: accent)

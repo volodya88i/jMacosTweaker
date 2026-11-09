@@ -18,28 +18,33 @@ struct WidgetsPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        PageScroll {
-            PageHeader(title: WindowSection.widgets.title, detail: String(localized: "Turn on only what you want to see. Modules that are off use no resources.")) {
+        Form {
+            Section {
                 Toggle(String(localized: "Combine into one item"), isOn: $settings.stored.combined)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+            } footer: {
+                Text("One item saves room beside the notch. Each module still keeps its own settings.")
+                    .foregroundStyle(.secondary)
             }
-            ForEach(Array(modules.enumerated()), id: \.element.module) { index, config in
-                WidgetRow(context: context, config: config, isFirst: index == 0, isLast: index == modules.count - 1)
+            Section {
+                ForEach(Array(modules.enumerated()), id: \.element.module) { index, config in
+                    WidgetRow(context: context, config: config, canMoveUp: index > 0, canMoveDown: index < modules.count - 1)
+                }
+            } header: {
+                Text("Modules")
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !context.modulesHiddenByMenuBar.isEmpty {
+                        InlineNotice(
+                            text: String(localized: "No room in the menu bar for: \(context.modulesHiddenByMenuBar.map(\.title).joined(separator: ", ")). Turn some modules off, or combine them."),
+                            level: .warning
+                        )
+                    }
+                    Text("Modules that are off use no resources. The order here is the order in the menu bar.")
+                        .foregroundStyle(.secondary)
+                }
             }
-            Hairline()
-            if !context.modulesHiddenByMenuBar.isEmpty {
-                ControlNotice(
-                    text: String(localized: "No room in the menu bar for: \(context.modulesHiddenByMenuBar.map(\.title).joined(separator: ", ")). Turn some modules off, or combine them."),
-                    level: .warning
-                )
-                .padding(.top, 12)
-            }
-            Text("If some modules do not appear, the menu bar is full, which is common beside the notch. Turn some off, or combine them.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.tkSecondary)
-                .padding(.top, 12)
         }
+        .formStyle(.grouped)
         .sampling(previewSources, every: 2, engine: context.engine)
     }
 }
@@ -65,8 +70,8 @@ private struct WidgetPreview: NSViewRepresentable {
 private struct WidgetRow: View {
     let context: AppContext
     let config: WidgetConfig
-    let isFirst: Bool
-    let isLast: Bool
+    let canMoveUp: Bool
+    let canMoveDown: Bool
     @State private var expanded = false
 
     private var settings: AppSettings { context.settings }
@@ -79,36 +84,30 @@ private struct WidgetRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !isFirst { Hairline() }
-            HStack(spacing: 12) {
-                Image(systemName: config.module.symbol).frame(width: 18).foregroundStyle(Color.tkSecondary)
+        DisclosureGroup(isExpanded: Binding(get: { expanded && config.enabled }, set: { expanded = $0 })) {
+            WidgetOptions(context: context, config: config, canMoveUp: canMoveUp, canMoveDown: canMoveDown)
+                .padding(.vertical, 4)
+        } label: {
+            HStack(spacing: 10) {
+                SettingsIcon(symbol: config.module.symbol, color: config.enabled ? .accentColor : .gray, size: 22)
                 Text(config.module.title)
                 Spacer()
                 if config.enabled {
-                    WidgetPreview(entry: previewEntry, accent: settings.stored.accent == .none ? .labelColor : Tokens.accent(settings.stored.accent))
+                    WidgetPreview(entry: previewEntry, accent: Tokens.menuBarAccent(settings.stored.accent))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .accessibilityHidden(true)
-                    Text(config.style.title).foregroundStyle(Color.tkSecondary)
-                    Button { expanded.toggle() } label: {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.tkSecondary)
-                    .accessibilityLabel(String(localized: "Options for \(config.module.title)"))
                 }
-                moveButton("chevron.left", offset: -1, disabled: isFirst, label: String(localized: "Move \(config.module.title) left"))
-                moveButton("chevron.right", offset: 1, disabled: isLast, label: String(localized: "Move \(config.module.title) right"))
                 Toggle(config.module.title, isOn: binding(\.enabled))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }
-            .frame(height: Tokens.Size.windowRow)
-            if expanded, config.enabled {
-                WidgetOptions(context: context, config: config)
-                    .padding(.leading, 30)
-                    .padding(.bottom, 14)
-            }
+        }
+        .contextMenu {
+            Button(String(localized: "Move Up")) { settings.moveWidget(config.module, by: -1) }.disabled(!canMoveUp)
+            Button(String(localized: "Move Down")) { settings.moveWidget(config.module, by: 1) }.disabled(!canMoveDown)
         }
     }
 
@@ -120,21 +119,13 @@ private struct WidgetRow: View {
             history: config.style == .sparkline ? WidgetEvaluator.recentHistory(config.module, store: context.store) : []
         )
     }
-
-    private func moveButton(_ symbol: String, offset: Int, disabled: Bool, label: String) -> some View {
-        Button { settings.moveWidget(config.module, by: offset) } label: {
-            Image(systemName: symbol).font(.system(size: 11))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(disabled ? Color.tkTertiary : Color.tkSecondary)
-        .disabled(disabled)
-        .accessibilityLabel(label)
-    }
 }
 
 private struct WidgetOptions: View {
     let context: AppContext
     let config: WidgetConfig
+    let canMoveUp: Bool
+    let canMoveDown: Bool
 
     private var settings: AppSettings { context.settings }
 
@@ -196,82 +187,74 @@ private struct WidgetOptions: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if isTemperature {
-                option(String(localized: "Sensor")) {
-                    Picker("", selection: Binding(
-                        get: { settings.widget(config.module).pinnedSensor },
-                        set: { value in update { $0.pinnedSensor = value } }
-                    )) {
-                        Text("Hottest").tag(SensorID?.none)
-                        ForEach(sensorChoices) { sensor in
-                            Text(sensor.name).tag(SensorID?.some(sensor.id))
-                        }
+                Picker(String(localized: "Sensor"), selection: Binding(
+                    get: { settings.widget(config.module).pinnedSensor },
+                    set: { value in update { $0.pinnedSensor = value } }
+                )) {
+                    Text("Hottest").tag(SensorID?.none)
+                    ForEach(sensorChoices) { sensor in
+                        Text(sensor.name).tag(SensorID?.some(sensor.id))
                     }
-                    .labelsHidden()
-                    .frame(width: 240)
                 }
             }
-            option(String(localized: "Style")) {
-                Picker("", selection: Binding(
-                    get: { settings.widget(config.module).style },
-                    set: { value in update { $0.style = value } }
-                )) {
-                    ForEach(config.module.allowedStyles, id: \.self) { Text($0.title).tag($0) }
-                }
-                .labelsHidden()
-                .frame(width: 180)
+            Picker(String(localized: "Style"), selection: Binding(
+                get: { settings.widget(config.module).style },
+                set: { value in update { $0.style = value } }
+            )) {
+                ForEach(config.module.allowedStyles, id: \.self) { Text($0.title).tag($0) }
             }
-            option(String(localized: "Update every")) {
-                Picker("", selection: Binding(
-                    get: { settings.widget(config.module).interval },
-                    set: { value in update { $0.interval = value } }
-                )) {
-                    ForEach([1.0, 2, 5, 10, 30, 60], id: \.self) { Text("\(Int($0)) s").tag($0) }
-                }
-                .labelsHidden()
-                .frame(width: 180)
+            Picker(String(localized: "Update every"), selection: Binding(
+                get: { settings.widget(config.module).interval },
+                set: { value in update { $0.interval = value } }
+            )) {
+                ForEach([1.0, 2, 5, 10, 30, 60], id: \.self) { Text("\(Int($0)) s").tag($0) }
             }
-            option(String(localized: "Show")) {
+            LabeledContent(String(localized: "Show")) {
                 HStack {
-                    Picker("", selection: Binding(
+                    if ruleKind == 1 || ruleKind == 2 {
+                        TextField(String(localized: "Value"), value: Binding(
+                            get: { shown(ruleValue) },
+                            set: { value in
+                                guard value.isFinite else { return }
+                                update { $0.visibility = rule(kind: ruleKind, value: storedValue(value)) }
+                            }
+                        ), format: .number.precision(.fractionLength(0...1)))
+                        .labelsHidden()
+                        .frame(width: 64)
+                        Text(unitLabel).foregroundStyle(.secondary)
+                    }
+                    Picker(String(localized: "Show"), selection: Binding(
                         get: { ruleKind },
                         set: { kind in update { $0.visibility = rule(kind: kind, value: ruleValue) } }
                     )) {
                         ForEach(ruleKinds, id: \.value) { Text($0.title).tag($0.value) }
                     }
                     .labelsHidden()
-                    .frame(width: 180)
-                    if ruleKind == 1 || ruleKind == 2 {
-                        TextField("", value: Binding(
-                            get: { shown(ruleValue) },
-                            set: { value in update { $0.visibility = rule(kind: ruleKind, value: storedValue(value)) } }
-                        ), format: .number.precision(.fractionLength(0...1)))
-                        .frame(width: 60)
-                        .textFieldStyle(.roundedBorder)
-                        Text(unitLabel).foregroundStyle(Color.tkSecondary)
-                    }
+                    .fixedSize()
                 }
             }
-            option(String(localized: "Warning color at")) {
+            LabeledContent(String(localized: "Warning color at")) {
                 ThresholdField(value: settings.widget(config.module).warningAt.map(shown), unit: unitLabel) { value in
                     update { $0.warningAt = value.map(storedValue) }
                 }
             }
-            option(String(localized: "Critical color at")) {
+            LabeledContent(String(localized: "Critical color at")) {
                 ThresholdField(value: settings.widget(config.module).criticalAt.map(shown), unit: unitLabel) { value in
                     update { $0.criticalAt = value.map(storedValue) }
                 }
             }
             if config.style != .iconValue {
-                option(String(localized: "Small label")) {
-                    Toggle("", isOn: Binding(
-                        get: { settings.widget(config.module).showsLabel },
-                        set: { value in update { $0.showsLabel = value } }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                }
+                Toggle(String(localized: "Small label above the value"), isOn: Binding(
+                    get: { settings.widget(config.module).showsLabel },
+                    set: { value in update { $0.showsLabel = value } }
+                ))
             }
+            HStack {
+                Spacer()
+                Button(String(localized: "Move Up")) { settings.moveWidget(config.module, by: -1) }.disabled(!canMoveUp)
+                Button(String(localized: "Move Down")) { settings.moveWidget(config.module, by: 1) }.disabled(!canMoveDown)
+            }
+            .controlSize(.small)
         }
     }
 
@@ -284,14 +267,6 @@ private struct WidgetOptions: View {
         default: .always
         }
     }
-
-    private func option(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        HStack(spacing: 12) {
-            Text(title).foregroundStyle(Color.tkSecondary).frame(width: 130, alignment: .leading)
-            content()
-            Spacer()
-        }
-    }
 }
 
 private struct ThresholdField: View {
@@ -301,10 +276,10 @@ private struct ThresholdField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            TextField(String(localized: "Off"), value: Binding(get: { value }, set: { newValue in onChange(newValue) }), format: .number.precision(.fractionLength(0...1)))
-                .frame(width: 60)
-                .textFieldStyle(.roundedBorder)
-            Text(unit).foregroundStyle(Color.tkSecondary)
+            TextField(String(localized: "Off"), value: Binding(get: { value }, set: { newValue in onChange(newValue.flatMap { $0.isFinite ? $0 : nil }) }), format: .number.precision(.fractionLength(0...1)))
+                .labelsHidden()
+                .frame(width: 64)
+            Text(unit).foregroundStyle(.secondary)
         }
     }
 }

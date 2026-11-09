@@ -65,6 +65,8 @@ public final class ControlCore: @unchecked Sendable {
     private var disconnectedAt: TimeInterval?
     private var lastGoodSensor: TimeInterval?
     private var lastGoodValue: Double?
+    /// Last time the supervisor had a CPU or GPU temperature to judge.
+    private var lastSupervisedAt: TimeInterval?
     private var fanFaulted = false
     private var chargeFaulted = false
     private var asleep = false
@@ -136,6 +138,7 @@ public final class ControlCore: @unchecked Sendable {
         lastError = nil
         lastHeartbeat = now
         lastGoodSensor = now
+        lastSupervisedAt = now
         clockNow = now
         for fan in manualFans where validated.policies[fan] == nil || validated.policies[fan] == .system {
             returnToSystem(fan: fan)
@@ -193,6 +196,7 @@ public final class ControlCore: @unchecked Sendable {
     public func didWake(now: TimeInterval) {
         asleep = false
         lastGoodSensor = now
+        lastSupervisedAt = now
         lastHeartbeat = now
         tick(now: now)
     }
@@ -238,6 +242,7 @@ public final class ControlCore: @unchecked Sendable {
             return
         }
         let overriding = supervisor.update(summary: summary)
+        if summary.cpuHottest != nil || summary.gpu != nil { lastSupervisedAt = now }
 
         if let reason = staleControllerReason(now: now) {
             releaseAllFans()
@@ -252,6 +257,16 @@ public final class ControlCore: @unchecked Sendable {
 
         verifyHeldFans()
         guard !fanFaulted else { return }
+
+        // The supervisor cannot protect anything it cannot see. Only Max is safe without temperatures, because nothing
+        // cools more. Invariants 3 and 4.
+        let onlyMaximum = request.policies.values.allSatisfy { $0 == .maximum || $0 == .system }
+        if !onlyMaximum, now - (lastSupervisedAt ?? now) > timing.sensorStaleAfter {
+            releaseAllFans()
+            fanRequest = nil
+            lastError = "CPU and GPU temperatures could not be read, so fans went back to system control."
+            return
+        }
 
         if overriding {
             // Maximum for every fan we control. If that fails, the failure path hands back to the system.
@@ -280,6 +295,9 @@ public final class ControlCore: @unchecked Sendable {
 
         for fan in inputs.fanLimits.keys.sorted() {
             guard let policy = request.policies[fan], policy != .system, let limits = inputs.fanLimits[fan] else { continue }
+            // A curve with no temperature yet has nothing to command, and manual mode without a target would leave the
+            // fan wherever unlocking put it.
+            if case .curve = policy, control == nil { continue }
             // Every tick until accepted, whatever the policy. A curve only produces output when its target changes,
             // which is too rare to get through the seconds of refusals after unlocking.
             if !manualFans.contains(fan), !enterManual(fan: fan) {

@@ -8,7 +8,7 @@ public struct SampleBatch: Sendable {
     public var temperatures: [SensorReading]?
     public var temperaturesAreFull = false
     public var temperatureSummary: TemperatureSummary?
-    /// Sent once, with the first temperature batch.
+    /// Sent with the first temperature batch, and again whenever an unreliable sensor is dropped.
     public var descriptors: [SensorDescriptor]?
     public var electrical: [SensorReading]?
     public var fans: [FanSnapshot]?
@@ -68,6 +68,7 @@ public actor SamplingEngine {
     private var paused = false
     private var timer: (any DispatchSourceTimer)?
     private var sensorGroups: [SensorID: SensorGroup]?
+    private var deliveredRevision = 0
     private let timerQueue = DispatchQueue(label: "com.jmacostweaker.sampling.timer", qos: .utility)
 
     public init(readers: HardwareReaders, deliver: @escaping @Sendable (SampleBatch) -> Void) {
@@ -176,8 +177,10 @@ public actor SamplingEngine {
             batch.temperatures = readers.sensors?.sampleTemperatures(full: false)
         }
         if let readings = batch.temperatures {
-            if sensorGroups == nil, let descriptors = readers.sensors?.descriptors() {
+            let revision = readers.sensors?.catalogRevision ?? 0
+            if sensorGroups == nil || revision != deliveredRevision, let descriptors = readers.sensors?.descriptors() {
                 sensorGroups = Dictionary(descriptors.map { ($0.id, $0.group) }, uniquingKeysWith: { first, _ in first })
+                deliveredRevision = revision
                 batch.descriptors = descriptors
             }
             let groups = sensorGroups ?? [:]

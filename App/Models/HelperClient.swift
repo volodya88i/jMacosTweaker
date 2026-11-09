@@ -26,6 +26,8 @@ final class HelperClient {
     @ObservationIgnored private var connection: NSXPCConnection?
     @ObservationIgnored private var heartbeatTask: Task<Void, Never>?
     @ObservationIgnored private var activity: (any NSObjectProtocol)?
+    @ObservationIgnored private var missedBeats = 0
+    private static let maxMissedBeats = 6
 
     private func proxy(onError: @escaping @Sendable (any Error) -> Void) -> (any HelperXPC)? {
         let active: NSXPCConnection
@@ -37,6 +39,10 @@ final class HelperClient {
             active.invalidationHandler = { [weak self] in
                 Task { @MainActor in self?.connectionLost() }
             }
+            // The helper restarted, and restored system control as it started. Show that rather than the old state.
+            active.interruptionHandler = { [weak self] in
+                Task { @MainActor in await self?.refresh() }
+            }
             active.resume()
             connection = active
         }
@@ -45,7 +51,6 @@ final class HelperClient {
 
     private func connectionLost() {
         connection = nil
-        stopHeartbeat()
         if state == .running { state = .notResponding }
     }
 
@@ -120,7 +125,15 @@ final class HelperClient {
 
     /// Runs only while fans are under control. If it stops, the helper hands the fans back. Invariant 3.
     private func updateHeartbeat() {
-        let active = status?.fanRequest?.policies.values.contains { $0 != .system } ?? false
+        let active: Bool
+        if let status {
+            active = status.fanRequest?.policies.values.contains { $0 != .system } ?? false
+        } else {
+            // A missed reply is not proof that control ended. Stopping here would make the helper hand fans back
+            // 20 s later, so the loop keeps trying for a while. Past the helper's own timeout there is nothing left
+            // to keep alive.
+            active = heartbeatTask != nil && state == .notResponding && missedBeats < Self.maxMissedBeats
+        }
         guard active else {
             stopHeartbeat()
             return
@@ -137,15 +150,17 @@ final class HelperClient {
     }
 
     private func beat() async {
-        guard state == .running else { return }
+        guard state == .running || state == .notResponding else { return }
         proxy(onError: { _ in })?.heartbeat()
         await send { proxy, reply in proxy.status(reply: reply) }
+        missedBeats = state == .running ? 0 : missedBeats + 1
         updateHeartbeat()
     }
 
     private func stopHeartbeat() {
         heartbeatTask?.cancel()
         heartbeatTask = nil
+        missedBeats = 0
         if let activity { ProcessInfo.processInfo.endActivity(activity) }
         activity = nil
     }

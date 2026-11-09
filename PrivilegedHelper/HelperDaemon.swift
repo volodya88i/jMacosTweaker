@@ -59,8 +59,9 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPC, @unchecked
             Self.logger.error("Rejected a client: \(String(describing: rejection), privacy: .public)")
             return false
         }
-        // Enforced by the system on every message, in addition to the check above.
-        if let pin { connection.setCodeSigningRequirement("cdhash H\"\(pin.cdhash)\"") }
+        // Enforced by the system on every message, in addition to the check above. The check above has already
+        // refused a pin that is not plain hex, so nothing can be injected into the requirement text.
+        if let pin { connection.setCodeSigningRequirement("cdhash H\"\(pin.cdhash.lowercased())\"") }
         connection.exportedInterface = NSXPCInterface(with: HelperXPC.self)
         connection.exportedObject = self
         let closed: @Sendable () -> Void = { [weak self] in self?.connectionClosed() }

@@ -10,7 +10,7 @@ struct SelfMetricsView: View {
         Text(line)
             .font(.system(size: 12))
             .monospacedDigit()
-            .foregroundStyle(Color.tkSecondary)
+            .foregroundStyle(.secondary)
             .task {
                 var last = SelfMetrics.read()
                 var lastTime = ContinuousClock.now

@@ -9,29 +9,55 @@ struct CurveEditor: View {
     let isEditable: Bool
     /// Where the control temperature sits now.
     var currentTemperature: Double?
+    var unit: TemperatureUnit = .celsius
     let onCommit: (FanCurve) -> Void
 
+    /// A drag either holds one point from start to end, or holds nothing. It never picks a point up halfway.
+    private enum DragTarget: Equatable {
+        case idle
+        case point(Int)
+        case nothing
+    }
+
     @State private var draft: FanCurve?
-    @State private var dragIndex: Int?
-    @Environment(\.lineStyle) private var style
+    @State private var target = DragTarget.idle
+    @Environment(\.dataTint) private var tint
 
     private static let temperatures = 30.0...100.0
-    private static let height: CGFloat = 220
+    private static let insets = EdgeInsets(top: 10, leading: 36, bottom: 20, trailing: 10)
+    private static let height: CGFloat = 230
     private var shown: FanCurve { draft ?? curve }
 
-    private func position(_ point: CurvePoint, in size: CGSize) -> CGPoint {
-        let range = Self.temperatures
-        return CGPoint(
-            x: (point.temperature - range.lowerBound) / (range.upperBound - range.lowerBound) * size.width,
-            y: (1 - point.percent / 100) * size.height
+    private static func plot(in size: CGSize) -> CGRect {
+        CGRect(
+            x: insets.leading, y: insets.top,
+            width: max(size.width - insets.leading - insets.trailing, 1),
+            height: max(size.height - insets.top - insets.bottom, 1)
         )
     }
 
+    private static func x(_ temperature: Double, in plot: CGRect) -> CGFloat {
+        plot.minX + CGFloat((temperature - temperatures.lowerBound) / (temperatures.upperBound - temperatures.lowerBound)) * plot.width
+    }
+
+    private static func y(_ percent: Double, in plot: CGRect) -> CGFloat {
+        plot.maxY - CGFloat(percent / 100) * plot.height
+    }
+
+    private func position(_ point: CurvePoint, in size: CGSize) -> CGPoint {
+        let plot = Self.plot(in: size)
+        return CGPoint(x: Self.x(point.temperature, in: plot), y: Self.y(point.percent, in: plot))
+    }
+
     private func point(at location: CGPoint, in size: CGSize) -> CurvePoint {
+        let plot = Self.plot(in: size)
         let range = Self.temperatures
-        let temperature = range.lowerBound + Double(location.x / size.width) * (range.upperBound - range.lowerBound)
-        let percent = (1 - Double(location.y / size.height)) * 100
-        return CurvePoint(temperature: temperature.rounded(), percent: min(max(percent.rounded(), 0), 100))
+        let temperature = range.lowerBound + Double((location.x - plot.minX) / plot.width) * (range.upperBound - range.lowerBound)
+        let percent = Double((plot.maxY - location.y) / plot.height) * 100
+        return CurvePoint(
+            temperature: min(max(temperature.rounded(), range.lowerBound), range.upperBound),
+            percent: min(max(percent.rounded(), 0), 100)
+        )
     }
 
     var body: some View {
@@ -49,7 +75,7 @@ struct CurveEditor: View {
                         .frame(width: 1, height: 1)
                         .position(position(point, in: size))
                         .accessibilityElement()
-                        .accessibilityLabel(String(localized: "Curve point at \(Int(point.temperature)) degrees"))
+                        .accessibilityLabel(String(localized: "Curve point at \(Format.temperature(point.temperature, unit: unit))"))
                         .accessibilityValue(String(localized: "\(Int(point.percent)) percent"))
                         .accessibilityAdjustableAction { direction in
                             guard isEditable else { return }
@@ -62,50 +88,64 @@ struct CurveEditor: View {
     }
 
     private func draw(in context: inout GraphicsContext, size: CGSize) {
+        let plot = Self.plot(in: size)
+        let grid = GraphicsContext.Shading.color(.secondary.opacity(0.2))
         for percent in stride(from: 0, through: 100, by: 25) {
-            let y = (1 - CGFloat(percent) / 100) * size.height
-            context.stroke(Path { $0.move(to: CGPoint(x: 0, y: y)); $0.addLine(to: CGPoint(x: size.width, y: y)) }, with: .color(style.divider), lineWidth: 1)
-            context.draw(Text("\(percent)%").font(.system(size: 10)).foregroundStyle(Color.tkSecondary), at: CGPoint(x: 2, y: max(y - 7, 7)), anchor: .leading)
+            let y = Self.y(Double(percent), in: plot)
+            context.stroke(Path { $0.move(to: CGPoint(x: plot.minX, y: y)); $0.addLine(to: CGPoint(x: plot.maxX, y: y)) }, with: grid, lineWidth: 0.5)
+            context.draw(Text("\(percent)%").font(.caption2).foregroundStyle(.secondary), at: CGPoint(x: plot.minX - 6, y: y), anchor: .trailing)
         }
         for temperature in stride(from: 40, through: 90, by: 10) {
-            let x = (Double(temperature) - 30) / 70 * size.width
-            context.draw(Text("\(temperature)°").font(.system(size: 10)).foregroundStyle(Color.tkSecondary), at: CGPoint(x: x, y: size.height - 7), anchor: .center)
+            let x = Self.x(Double(temperature), in: plot)
+            context.stroke(Path { $0.move(to: CGPoint(x: x, y: plot.minY)); $0.addLine(to: CGPoint(x: x, y: plot.maxY)) }, with: grid, lineWidth: 0.5)
+            context.draw(Text(Format.temperature(Double(temperature), unit: unit)).font(.caption2).foregroundStyle(.secondary), at: CGPoint(x: x, y: plot.maxY + 11), anchor: .center)
         }
 
         let points = shown.points.map { position($0, in: size) }
         guard let first = points.first, let last = points.last else { return }
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: first.y))
-        for point in points { path.addLine(to: point) }
-        path.addLine(to: CGPoint(x: size.width, y: last.y))
-        context.stroke(path, with: .color(style.line), lineWidth: 1.5)
-        for point in points {
-            let rect = CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
-            context.fill(Path(rect), with: .color(isEditable ? style.line : style.secondaryLine))
-        }
+        var line = Path()
+        line.move(to: CGPoint(x: plot.minX, y: first.y))
+        for point in points { line.addLine(to: point) }
+        line.addLine(to: CGPoint(x: plot.maxX, y: last.y))
+        var area = line
+        area.addLine(to: CGPoint(x: plot.maxX, y: plot.maxY))
+        area.addLine(to: CGPoint(x: plot.minX, y: plot.maxY))
+        area.closeSubpath()
+        context.fill(area, with: .linearGradient(Gradient(colors: [tint.opacity(0.22), tint.opacity(0.02)]), startPoint: CGPoint(x: 0, y: plot.minY), endPoint: CGPoint(x: 0, y: plot.maxY)))
+        context.stroke(line, with: .color(tint), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
         if let currentTemperature {
-            let range = Self.temperatures
-            let x = (min(max(currentTemperature, range.lowerBound), range.upperBound) - range.lowerBound) / (range.upperBound - range.lowerBound) * size.width
-            context.stroke(Path { $0.move(to: CGPoint(x: x, y: 0)); $0.addLine(to: CGPoint(x: x, y: size.height)) }, with: .color(.tkSecondary), lineWidth: 1)
-            let y = (1 - CurveMath.percent(at: currentTemperature, curve: shown) / 100) * size.height
-            context.fill(Path(ellipseIn: CGRect(x: x - 3, y: y - 3, width: 6, height: 6)), with: .color(.tkPrimary))
+            let clamped = min(max(currentTemperature, Self.temperatures.lowerBound), Self.temperatures.upperBound)
+            let x = Self.x(clamped, in: plot)
+            context.stroke(Path { $0.move(to: CGPoint(x: x, y: plot.minY)); $0.addLine(to: CGPoint(x: x, y: plot.maxY)) }, with: .color(.orange.opacity(0.8)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            let y = Self.y(CurveMath.percent(at: currentTemperature, curve: shown), in: plot)
+            context.fill(Path(ellipseIn: CGRect(x: x - 4, y: y - 4, width: 8, height: 8)), with: .color(.orange))
+            let label = context.resolve(Text(Format.temperature(currentTemperature, unit: unit)).font(.caption2.weight(.semibold)).foregroundStyle(.orange))
+            let labelSize = label.measure(in: size)
+            context.draw(label, at: CGPoint(x: min(max(x, plot.minX + labelSize.width / 2), plot.maxX - labelSize.width / 2), y: plot.minY + 1), anchor: .top)
+        }
+
+        for (index, point) in points.enumerated() {
+            let radius: CGFloat = target == .point(index) ? 6 : 4.5
+            let rect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+            context.fill(Path(ellipseIn: rect), with: .color(isEditable ? tint : .secondary))
+            context.stroke(Path(ellipseIn: rect), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
         }
     }
 
     private func drag(_ size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 1)
             .onChanged { value in
-                var working = shown
-                if dragIndex == nil {
-                    dragIndex = nearest(to: value.startLocation, in: size)
+                if target == .idle {
+                    target = nearest(to: value.startLocation, in: size).map(DragTarget.point) ?? .nothing
                 }
-                guard let index = dragIndex else { return }
+                guard case let .point(index) = target else { return }
+                var working = shown
                 working.points[index] = constrained(point(at: value.location, in: size), index: index, in: working)
                 draft = working
             }
             .onEnded { _ in
-                dragIndex = nil
+                target = .idle
                 if let draft { commit(draft) }
             }
     }
@@ -115,7 +155,7 @@ struct CurveEditor: View {
         for (index, candidate) in shown.points.enumerated() {
             let p = position(candidate, in: size)
             let distance = hypot(p.x - location.x, p.y - location.y)
-            if distance < 24, distance < (best?.distance ?? .infinity) { best = (index, distance) }
+            if distance < 20, distance < (best?.distance ?? .infinity) { best = (index, distance) }
         }
         return best?.index
     }
@@ -138,7 +178,7 @@ struct CurveEditor: View {
             working.points.remove(at: index)
         } else {
             let added = point(at: location, in: size)
-            guard !working.points.contains(where: { $0.temperature == added.temperature }) else { return }
+            guard !working.points.contains(where: { abs($0.temperature - added.temperature) < 1 }) else { return }
             let index = working.points.firstIndex { $0.temperature > added.temperature } ?? working.points.count
             working.points.insert(added, at: index)
             working.points[index] = constrained(added, index: index, in: working)

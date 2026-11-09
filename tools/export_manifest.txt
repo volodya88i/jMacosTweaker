@@ -8,7 +8,6 @@ Tests
 Config/Signing.xcconfig
 project.yml
 screenshots
-tools/com.jmacostweaker.helper.plist
 tools/install_helper.sh
 tools/uninstall_helper.sh
 tools/test.sh
@@ -25,6 +24,7 @@ tools/probes/hidprobe.swift
 tools/probes/ioreportprobe.swift
 tools/probes/ioreportstates.swift
 tools/probes/smcprobe.swift
+tools/probes/sensorglitch.swift
 tools/probes/thermal_correlation.sh
 README.md
 LICENSE

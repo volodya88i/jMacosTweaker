@@ -1,92 +1,53 @@
 import AppKit
 import SwiftUI
 
-private final class KeyablePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-
-    override func cancelOperation(_ sender: Any?) {
-        orderOut(sender)
-    }
-}
-
-/// A borderless, solid panel anchored under a status item. `NSPopover` would add vibrancy and tint true black.
-/// Content is created on open and released on close, so a closed panel costs nothing and holds no sampling demand.
+/// A native popover under a status item. It gets the system material, and Liquid Glass on macOS 26 and later.
+/// Content is created on open and released on close, so a closed popover costs nothing and holds no sampling demand.
 @MainActor
-final class PanelController {
-    private var panel: NSPanel?
-    private var monitors: [Any] = []
+final class PanelController: NSObject, NSPopoverDelegate {
+    private var popover: NSPopover?
     private var openModule: Module?
+    /// A click on the item that owns an open popover closes it on mouse down, before the item's action runs on mouse up.
+    /// Without this, that same click would open it again at once.
+    private var lastClose: (module: Module?, time: TimeInterval)?
 
     func toggle<Content: View>(module: Module?, anchor: NSStatusBarButton, @ViewBuilder content: () -> Content) {
-        let wasOpen = panel?.isVisible == true
-        let sameModule = openModule == module
-        close()
-        if wasOpen, sameModule { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let popover, popover.isShown {
+            let same = openModule == module
+            close()
+            if same { return }
+        } else if let lastClose, lastClose.module == module, now - lastClose.time < 0.35 {
+            self.lastClose = nil
+            return
+        }
         open(module: module, anchor: anchor, content: content())
     }
 
     private func open(module: Module?, anchor: NSStatusBarButton, content: some View) {
-        guard let window = anchor.window else { return }
-        let host = NSHostingView(rootView: content
-            .frame(width: Tokens.Size.panelWidth)
-            .background(Color.tkBackground)
-            .clipShape(RoundedRectangle(cornerRadius: Tokens.Size.panelRadius))
-            .overlay(RoundedRectangle(cornerRadius: Tokens.Size.panelRadius).strokeBorder(Color.tkControl)))
-        host.layoutSubtreeIfNeeded()
-        let size = host.fittingSize
-
-        let panel = KeyablePanel(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .statusBar
-        panel.collectionBehavior = [.transient, .moveToActiveSpace]
-        panel.contentView = host
-        panel.isReleasedWhenClosed = false
-        panel.setContentSize(size)
-
-        let anchorFrame = window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-        let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
-        var origin = NSPoint(x: anchorFrame.midX - size.width / 2, y: anchorFrame.minY - size.height - 6)
-        origin.x = min(max(origin.x, screen.minX + 8), screen.maxX - size.width - 8)
-        origin.y = max(origin.y, screen.minY + 8)
-        panel.setFrameOrigin(origin)
-        panel.makeKeyAndOrderFront(nil)
-
-        self.panel = panel
+        let controller = NSHostingController(rootView: content)
+        controller.sizingOptions = [.preferredContentSize]
+        let popover = NSPopover()
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        popover.delegate = self
+        self.popover = popover
         openModule = module
-        installMonitors()
+        NSApp.activate()
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
     }
 
     func close() {
-        for monitor in monitors { NSEvent.removeMonitor(monitor) }
-        monitors.removeAll()
-        panel?.orderOut(nil)
-        panel?.contentView = nil
-        panel = nil
-        openModule = nil
+        popover?.performClose(nil)
     }
 
-    /// Exists only while the panel is open, so a closed panel adds no event handling.
-    private func installMonitors() {
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.close() }
-        }) {
-            monitors.append(global)
-        }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
-            if event.keyCode == 53 {
-                MainActor.assumeIsolated { self?.close() }
-                return nil
-            }
-            return event
-        }) {
-            monitors.append(local)
-        }
+    func popoverDidClose(_ notification: Notification) {
+        guard let closed = notification.object as? NSPopover, closed === popover else { return }
+        lastClose = (openModule, ProcessInfo.processInfo.systemUptime)
+        closed.contentViewController = nil
+        popover = nil
+        openModule = nil
     }
 }

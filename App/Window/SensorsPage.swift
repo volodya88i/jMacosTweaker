@@ -8,11 +8,14 @@ struct SensorsPage: View {
 
     private var model: SensorsModel { context.store.sensors }
 
+    private var query: String { search.trimmingCharacters(in: .whitespaces) }
+
+    private func matches(_ descriptor: SensorDescriptor) -> Bool {
+        query.isEmpty || descriptor.name.localizedCaseInsensitiveContains(query) || descriptor.group.title.localizedCaseInsensitiveContains(query)
+    }
+
     private var rawGroups: [(group: SensorGroup, rows: [SensorDescriptor])] {
-        let query = search.trimmingCharacters(in: .whitespaces)
-        let matching = model.descriptors.filter {
-            query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.group.title.localizedCaseInsensitiveContains(query)
-        }
+        let matching = model.descriptors.filter(matches)
         return SensorGroup.allCases.compactMap { group in
             let rows = matching.filter { $0.group == group }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             return rows.isEmpty ? nil : (group, rows)
@@ -21,79 +24,99 @@ struct SensorsPage: View {
 
     /// Curated rows as ordinary descriptors, so both lists share one row view.
     private var curatedRows: [SensorDescriptor] {
-        model.curated.map { SensorDescriptor(id: $0.id, name: $0.name, group: $0.section, kind: .temperature) }
+        model.curated.map { SensorDescriptor(id: $0.id, name: $0.name, group: $0.section, kind: .temperature) }.filter(matches)
     }
 
-    private var detail: String {
+    private var subtitle: String {
         showAll
-            ? String(localized: "\(model.descriptors.count) raw sensors. Names come from observation, not from Apple.")
-            : String(localized: "The sensors that matter. Groups come from load tests on real hardware, not from Apple.")
+            ? String(localized: "\(model.descriptors.count) sensors. Names come from observation, not from Apple.")
+            : String(localized: "Groups come from load tests on real hardware, not from Apple.")
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            PageHeader(title: WindowSection.sensors.title, detail: detail) {
-                HStack(spacing: 12) {
-                    if showAll {
-                        TextField(String(localized: "Search"), text: $search)
-                            .textFieldStyle(.plain)
-                            .padding(.horizontal, 8)
-                            .frame(width: 160, height: 26)
-                            .overlay(RoundedRectangle(cornerRadius: Tokens.Size.controlRadius).strokeBorder(Color.tkControl))
+        List {
+            if showAll {
+                ForEach(rawGroups, id: \.group) { entry in
+                    Section {
+                        ForEach(entry.rows) { SensorRow(context: context, descriptor: $0) }
+                    } header: {
+                        ColumnsHeader(title: entry.group.title)
                     }
-                    Toggle(String(localized: "All sensors"), isOn: $showAll)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
                 }
-            }
-            .padding(.horizontal, 28)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    if showAll {
-                        ForEach(rawGroups, id: \.group) { entry in
-                            Section {
-                                ForEach(entry.rows) { SensorRow(context: context, descriptor: $0) }
-                            } header: {
-                                SensorColumnsHeader(title: entry.group.title)
+            } else {
+                Section {
+                    ForEach(curatedRows) { SensorRow(context: context, descriptor: $0) }
+                } header: {
+                    ColumnsHeader(title: String(localized: "Temperature"))
+                }
+                if !context.store.fans.current.isEmpty, query.isEmpty {
+                    Section(String(localized: "Fans")) {
+                        ForEach(context.store.fans.current, id: \.index) { fan in
+                            HStack {
+                                Text("Fan \(fan.index + 1)")
+                                Spacer()
+                                Text(Format.fanSpeed(fan.actualRPM)).monospacedDigit()
                             }
                         }
-                    } else {
-                        Section {
-                            ForEach(curatedRows) { SensorRow(context: context, descriptor: $0) }
-                        } header: {
-                            SensorColumnsHeader(title: String(localized: "Temperature"))
-                        }
-                        if !context.store.fans.current.isEmpty {
-                            SectionLabel("Fans").padding(.top, 22)
-                            FanRows(model: context.store.fans)
-                        }
                     }
                 }
-                .padding(.horizontal, 28)
-                .padding(.bottom, 28)
+            }
+        }
+        .listStyle(.inset(alternatesRowBackgrounds: true))
+        .overlay {
+            if model.descriptors.isEmpty {
+                ContentUnavailableView(String(localized: "Reading sensors…"), systemImage: "thermometer.medium")
+            } else if showAll ? rawGroups.isEmpty : curatedRows.isEmpty {
+                ContentUnavailableView.search(text: query)
+            }
+        }
+        .navigationSubtitle(subtitle)
+        .searchable(text: $search, placement: .toolbar, prompt: String(localized: "Search sensors"))
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Picker(String(localized: "Sensors shown"), selection: $showAll) {
+                    Text("Main").tag(false)
+                    Text("All").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .help(String(localized: "Main shows the sensors that matter. All lists every raw sensor."))
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.resetStatistics()
+                } label: {
+                    Label(String(localized: "Reset Min and Max"), systemImage: "arrow.counterclockwise")
+                }
+                .help(String(localized: "Starts minimum, average and maximum over from now"))
             }
         }
         .sampling(showAll ? [.temperatureFull, .electrical, .fans] : [.temperatureFull, .fans], every: 2, engine: context.engine)
     }
 }
 
-private struct SensorColumnsHeader: View {
+private enum Column {
+    static let value: CGFloat = 58
+    static let now: CGFloat = 66
+    static let pin: CGFloat = 26
+}
+
+private struct ColumnsHeader: View {
     let title: String
 
     var body: some View {
         HStack {
             Text(title)
             Spacer()
-            Text("Min").frame(width: 56, alignment: .trailing)
-            Text("Avg").frame(width: 56, alignment: .trailing)
-            Text("Max").frame(width: 56, alignment: .trailing)
-            Text("Now").frame(width: 64, alignment: .trailing)
-            Spacer().frame(width: 28)
+            Group {
+                Text("Min").frame(width: Column.value, alignment: .trailing)
+                Text("Avg").frame(width: Column.value, alignment: .trailing)
+                Text("Max").frame(width: Column.value, alignment: .trailing)
+                Text("Now").frame(width: Column.now, alignment: .trailing)
+            }
+            .foregroundStyle(.secondary)
+            Spacer().frame(width: Column.pin)
         }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(Color.tkSecondary)
-        .frame(height: 34)
-        .background(Color.tkBackground)
     }
 }
 
@@ -118,42 +141,43 @@ private struct SensorRow: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Hairline()
-            HStack {
-                Text(descriptor.name).lineLimit(1)
-                Spacer(minLength: 12)
-                Group {
-                    Text(text(stats?.minimum)).frame(width: 56, alignment: .trailing)
-                    Text(text(stats?.average)).frame(width: 56, alignment: .trailing)
-                    Text(text(stats?.maximum)).frame(width: 56, alignment: .trailing)
-                }
-                .foregroundStyle(Color.tkSecondary)
-                Text(isStale ? String(localized: "Lost") : text(stats?.latest))
-                    .frame(width: 64, alignment: .trailing)
-                    .foregroundStyle(isStale ? Color.tkSecondary : Color.tkPrimary)
-                pinButton.frame(width: 28, alignment: .trailing)
+        let level = descriptor.kind == .temperature && !isStale ? LevelColor.temperatureLevel(stats?.latest) : .normal
+        HStack {
+            Text(descriptor.name).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 12)
+            Group {
+                Text(text(stats?.minimum)).frame(width: Column.value, alignment: .trailing)
+                Text(text(stats?.average)).frame(width: Column.value, alignment: .trailing)
+                Text(text(stats?.maximum)).frame(width: Column.value, alignment: .trailing)
             }
-            .monospacedDigit()
-            .frame(height: 29)
+            .foregroundStyle(.secondary)
+            // No current reading: the sensor's cluster is powered down, or it vanished. A dash, not an old value.
+            Text(isStale ? "–" : text(stats?.latest))
+                .fontWeight(.medium)
+                .foregroundStyle(isStale ? Color.secondary : LevelColor.color(level, fallback: .primary))
+                .frame(width: Column.now, alignment: .trailing)
+            pinButton.frame(width: Column.pin, alignment: .trailing)
         }
+        .monospacedDigit()
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder private var pinButton: some View {
         if descriptor.kind == .temperature {
+            // Read once, outside the update: reading settings while they are being changed is an exclusivity violation.
+            let pinned = isPinned
             Button {
                 context.settings.updateWidget(.temperature) { config in
-                    config.pinnedSensor = isPinned ? nil : descriptor.id
-                    if !isPinned { config.enabled = true }
+                    config.pinnedSensor = pinned ? nil : descriptor.id
+                    if !pinned { config.enabled = true }
                 }
             } label: {
-                Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isPinned ? Color.tkPrimary : Color.tkTertiary)
+                Image(systemName: pinned ? "pin.fill" : "pin")
+                    .foregroundStyle(pinned ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help(String(localized: "Show this sensor in the Temperature menu bar module"))
-            .accessibilityLabel(isPinned ? String(localized: "Unpin \(descriptor.name)") : String(localized: "Pin \(descriptor.name) to the menu bar"))
+            .accessibilityLabel(pinned ? String(localized: "Unpin \(descriptor.name)") : String(localized: "Pin \(descriptor.name) to the menu bar"))
         }
     }
 }

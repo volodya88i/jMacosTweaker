@@ -108,6 +108,31 @@ final class ProcessModel {
     var current: ProcessSnapshot?
 }
 
+/// The parts of the Mac that summaries and charts name.
+enum TemperatureArea: String, CaseIterable, Identifiable, Sendable {
+    case cpu, gpu, ssd, battery
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .cpu: String(localized: "CPU")
+        case .gpu: String(localized: "GPU")
+        case .ssd: String(localized: "SSD")
+        case .battery: String(localized: "Battery")
+        }
+    }
+
+    func value(in summary: TemperatureSummary) -> Double? {
+        switch self {
+        case .cpu: summary.cpuHottest
+        case .gpu: summary.gpu
+        case .ssd: summary.ssd
+        case .battery: summary.battery
+        }
+    }
+}
+
 struct SensorStats: Sendable {
     var latest: Double
     var minimum: Double
@@ -128,7 +153,19 @@ final class SensorsModel {
     var summary: TemperatureSummary?
     var stats: [SensorID: SensorStats] = [:]
     var temperatureHistory = History(capacity: 120, filler: 0)
+    /// Per-area histories for the temperature chart. NaN marks a sample where that area had no reading.
+    var areaHistory: [TemperatureArea: History] = [:]
     var curated: [CuratedSensor] = []
+
+    func recordSummary(_ summary: TemperatureSummary) {
+        self.summary = summary
+        if let hottest = summary.hottest { temperatureHistory.append(Float(hottest)) }
+        for area in TemperatureArea.allCases {
+            let value = area.value(in: summary).map(Float.init) ?? .nan
+            guard !value.isNaN || areaHistory[area] != nil else { continue }
+            areaHistory[area, default: History(capacity: 120, filler: .nan)].append(value)
+        }
+    }
 
     private func group(of id: SensorID) -> SensorGroup? {
         curated.first { $0.id == id }?.section ?? descriptors.first { $0.id == id }?.group
@@ -155,6 +192,24 @@ final class SensorsModel {
     func apply(readings: [SensorReading], now: TimeInterval) {
         for reading in readings { record(id: reading.id, value: reading.value, now: now) }
         updateCurated(now: now)
+    }
+
+    /// A new list arrives when sensors that were powered down at launch, such as the GPU's, report for the first time.
+    /// Aggregates whose members changed start their statistics over, so they never mix two different sets of sensors.
+    func replaceCatalog(_ value: [SensorDescriptor]) {
+        let removed = Set(descriptors.map(\.id)).subtracting(value.map(\.id))
+        let previous = Dictionary(curated.map { ($0.id, Set($0.members)) }, uniquingKeysWith: { first, _ in first })
+        descriptors = value
+        curated = SensorCuration.curated(from: value)
+        for id in removed { stats[id] = nil }
+        for sensor in curated where sensor.members.count > 1 && previous[sensor.id] != Set(sensor.members) {
+            stats[sensor.id] = nil
+        }
+    }
+
+    /// Starts min, max and average over from now.
+    func resetStatistics() {
+        stats.removeAll()
     }
 
     /// Aggregate rows get the same statistics as real sensors, computed only from sensors seen in this batch's window.
@@ -248,14 +303,8 @@ final class MonitorStore {
         if let value = batch.network { network.apply(value) }
         if let value = batch.disk { disk.apply(value) }
         if let value = batch.processes { processes.current = value }
-        if let value = batch.descriptors {
-            sensors.descriptors = value
-            sensors.curated = SensorCuration.curated(from: value)
-        }
-        if let value = batch.temperatureSummary {
-            sensors.summary = value
-            if let hottest = value.hottest { sensors.temperatureHistory.append(Float(hottest)) }
-        }
+        if let value = batch.descriptors { sensors.replaceCatalog(value) }
+        if let value = batch.temperatureSummary { sensors.recordSummary(value) }
         let now = ProcessInfo.processInfo.systemUptime
         if let value = batch.temperatures { sensors.apply(readings: value, now: now) }
         if let value = batch.electrical { sensors.apply(readings: value, now: now) }

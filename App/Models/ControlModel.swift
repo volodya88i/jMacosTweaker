@@ -290,21 +290,22 @@ final class ControlModel {
 
     // MARK: Status text
 
-    func statusLine(base: String) -> String {
-        var parts = [base]
+    /// What the app is doing right now, in short phrases. Empty when everything is under system control.
+    func statusDetails() -> [String] {
+        var parts: [String] = []
+        if let reason = helper.status?.supervisorReason {
+            parts.append(String(localized: "Thermal protection active: \(reason)"))
+        }
         let fan = settings.stored.fan
-        if helper.state == .running, fan.linked, fan.preset != .system {
-            parts.append(String(localized: "Fans on \(fan.preset.title)"))
+        if helper.state == .running, helper.status?.fansUnderControl.isEmpty == false {
+            parts.append(fan.linked ? String(localized: "Fans on \(fan.preset.title)") : String(localized: "Fans set per fan"))
         }
         if helper.state == .running, settings.stored.charge.enabled {
             parts.append(String(localized: "Charge limit \(settings.stored.charge.limit)%"))
         } else if let limit = nativeChargeLimit, limit < 100 {
             parts.append(String(localized: "Charge limit \(limit)%"))
         }
-        if let reason = helper.status?.supervisorReason {
-            parts.append(String(localized: "Thermal protection active: \(reason)"))
-        }
-        return parts.joined(separator: ". ")
+        return parts
     }
 }
 

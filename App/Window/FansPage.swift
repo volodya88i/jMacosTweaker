@@ -19,7 +19,7 @@ struct FansPage: View {
         if control.isStartingFans { return String(localized: "Starting manual control…") }
         return control.helper.status?.fansUnderControl.isEmpty == false
             ? String(localized: "Controlled by jMacosTweaker")
-            : String(localized: "Controlled by the system")
+            : String(localized: "Controlled by macOS")
     }
 
     /// The curve on show. Built-in curves are read-only, and editing one starts a Custom curve from it.
@@ -27,8 +27,221 @@ struct FansPage: View {
         fanSettings.preset == .custom ? fanSettings.customCurve : fanSettings.preset.curve
     }
 
+    var body: some View {
+        PageScroll {
+            if let reason = blockReason {
+                NoticeCard(
+                    symbol: "lock.fill",
+                    title: String(localized: "Fan control is read-only"),
+                    text: reason,
+                    command: commandForBlock
+                )
+            }
+            if let error = control.helper.lastError {
+                Card { InlineNotice(text: error, level: .warning) }
+            }
+            Card {
+                CardHeader(symbol: "fan", title: String(localized: "Speed")) { Text(headerDetail) }
+                FansGrid(context: context)
+                if store.fans.current.contains(where: { $0.actualRPM == 0 }), control.helper.status?.fansUnderControl.isEmpty != false {
+                    Text("Stopped fans are normal: macOS turns them off at low load.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            SectionTitle(String(localized: "Mode"))
+            Group {
+                if fanSettings.linked {
+                    PresetGrid(context: context)
+                } else {
+                    Card {
+                        ForEach(0..<store.availability.fanCount, id: \.self) { fan in
+                            if fan > 0 { Divider() }
+                            LabeledContent(String(localized: "Fan \(fan + 1)")) {
+                                FanPresetPicker(control: control, fan: fan).frame(maxWidth: 520)
+                            }
+                        }
+                    }
+                }
+                options
+                if let curve = shownCurve {
+                    CurveCard(context: context, curve: curve)
+                }
+            }
+            .disabled(blockReason != nil)
+        }
+        .navigationSubtitle(headerDetail)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { RestoreButton(control: control) }
+        }
+        .sampling([.fans, .temperatureSummary], engine: store.engine)
+        .task { await control.refresh() }
+    }
+
+    private var commandForBlock: String? {
+        if control.helper.state != .running, control.helper.state != .checking { return control.installCommand }
+        if control.isUnverifiedOnly { return control.testInstallCommand }
+        return nil
+    }
+
+    @ViewBuilder private var options: some View {
+        let showsLink = store.availability.fanCount > 1
+        let showsConstant = fanSettings.linked && fanSettings.preset == .constant
+        if showsLink || showsConstant || store.availability.hasBattery {
+            Card {
+                if showsConstant {
+                    LabeledContent(String(localized: "Constant speed")) {
+                        HStack(spacing: 10) {
+                            Slider(
+                                value: Binding(get: { fanSettings.constantPercent }, set: { control.setConstant(percent: $0) }),
+                                in: 0...100,
+                                step: 5
+                            )
+                            .accessibilityLabel(String(localized: "Constant fan speed"))
+                            Text(constantLabel).monospacedDigit().foregroundStyle(.secondary).frame(width: 130, alignment: .trailing)
+                        }
+                        .frame(maxWidth: 420)
+                    }
+                    Divider()
+                }
+                if showsLink {
+                    Toggle(String(localized: "Same setting for all fans"), isOn: Binding(
+                        get: { fanSettings.linked },
+                        set: { control.setLinked($0) }
+                    ))
+                    .toggleStyle(.switch)
+                    if store.availability.hasBattery { Divider() }
+                }
+                if store.availability.hasBattery {
+                    AutoSwitchRow(context: context)
+                }
+            }
+        }
+    }
+
+    /// The slider runs from the fan's hardware minimum to its maximum. Only macOS can stop a fan, in Auto.
+    private var constantLabel: String {
+        guard let fan = store.fans.current.first else { return "\(Int(fanSettings.constantPercent))%" }
+        let rpm = CurveMath.rpm(percent: fanSettings.constantPercent, minimum: fan.minimumRPM, maximum: fan.maximumRPM)
+        let text = "\(Format.rpm(rpm)) rpm"
+        return fanSettings.constantPercent == 0 ? String(localized: "\(text) (minimum)") : text
+    }
+}
+
+// MARK: Presets
+
+/// Every mode as a card with a picture of what it does. The selected one carries the accent outline.
+private struct PresetGrid: View {
+    let context: AppContext
+
+    var body: some View {
+        let selected = context.settings.stored.fan.preset
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
+            ForEach(FanPreset.allCases, id: \.self) { preset in
+                PresetCard(
+                    preset: preset,
+                    curve: preset == .custom ? context.settings.stored.fan.customCurve : preset.curve,
+                    constant: context.settings.stored.fan.constantPercent,
+                    isSelected: preset == selected
+                ) {
+                    context.control.select(preset: preset)
+                }
+            }
+        }
+    }
+}
+
+private struct PresetCard: View {
+    let preset: FanPreset
+    let curve: FanCurve?
+    let constant: Double
+    let isSelected: Bool
+    let action: () -> Void
+
+    @Environment(\.dataTint) private var tint
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(preset.title, systemImage: preset.symbol)
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? tint : .primary)
+                    .lineLimit(1)
+                PresetThumbnail(preset: preset, curve: curve, constant: constant, highlighted: isSelected)
+                    .frame(height: 30)
+                Text(preset.caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: Tokens.Size.cardRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.Size.cardRadius, style: .continuous)
+                    .strokeBorder(isSelected ? tint : Color.primary.opacity(0.06), lineWidth: isSelected ? 2 : 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Tokens.Size.cardRadius))
+            .opacity(isEnabled ? 1 : 0.55)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.title)
+        .accessibilityHint(preset.caption)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// The shape of a mode over 30 to 100 °C: a curve, a flat line, or a dashed line for macOS's own control.
+private struct PresetThumbnail: View {
+    let preset: FanPreset
+    let curve: FanCurve?
+    let constant: Double
+    let highlighted: Bool
+
+    @Environment(\.dataTint) private var tint
+
+    var body: some View {
+        Canvas { context, size in
+            let color = highlighted ? tint : Color.secondary
+            func y(_ percent: Double) -> CGFloat { size.height - 2 - CGFloat(percent / 100) * (size.height - 4) }
+            var path = Path()
+            switch preset {
+            case .system:
+                path.move(to: CGPoint(x: 0, y: y(20)))
+                path.addCurve(to: CGPoint(x: size.width, y: y(70)), control1: CGPoint(x: size.width * 0.5, y: y(15)), control2: CGPoint(x: size.width * 0.6, y: y(75)))
+                context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3]))
+                return
+            case .maximum:
+                path.move(to: CGPoint(x: 0, y: y(100)))
+                path.addLine(to: CGPoint(x: size.width, y: y(100)))
+            case .constant:
+                path.move(to: CGPoint(x: 0, y: y(constant)))
+                path.addLine(to: CGPoint(x: size.width, y: y(constant)))
+            default:
+                guard let curve, let first = curve.points.first else { return }
+                func x(_ temperature: Double) -> CGFloat { CGFloat((min(max(temperature, 30), 100) - 30) / 70) * size.width }
+                path.move(to: CGPoint(x: 0, y: y(first.percent)))
+                for point in curve.points { path.addLine(to: CGPoint(x: x(point.temperature), y: y(point.percent))) }
+                path.addLine(to: CGPoint(x: size.width, y: y(curve.points.last?.percent ?? 100)))
+            }
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: Curve
+
+private struct CurveCard: View {
+    let context: AppContext
+    let curve: FanCurve
+
+    private var control: ControlModel { context.control }
+    private var fanSettings: FanSettings { context.settings.stored.fan }
+
     private var controlTemperature: Double? {
-        let summary = store.sensors.summary
+        let summary = context.store.sensors.summary
         switch fanSettings.sensor {
         case .cpuAverage: return summary?.cpuAverage
         case .cpuHottest: return summary?.cpuHottest
@@ -39,106 +252,8 @@ struct FansPage: View {
         }
     }
 
-    var body: some View {
-        PageScroll {
-            PageHeader(title: WindowSection.fans.title, detail: headerDetail) {
-                RestoreButton(control: control)
-            }
-            if let reason = blockReason {
-                ControlNotice(text: reason).padding(.top, 14)
-                if control.helper.state != .running, control.helper.state != .checking {
-                    CommandLineView(command: control.installCommand).padding(.top, 8)
-                } else if control.isUnverifiedOnly {
-                    CommandLineView(command: control.testInstallCommand).padding(.top, 8)
-                }
-            } else {
-                controls
-            }
-            if let error = control.helper.lastError {
-                ControlNotice(text: error, level: .warning).padding(.top, 10)
-            }
-            SectionLabel("Speed").padding(.top, 22)
-            ForEach(store.fans.current, id: \.index) { fan in
-                FanRow(fan: fan, target: control.helper.status?.targets[fan.index])
-            }
-            Hairline()
-            if store.fans.current.contains(where: { $0.actualRPM == 0 }), control.helper.status?.fansUnderControl.isEmpty != false {
-                Text("Stopped fans are normal: macOS can turn them off at low load.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.tkSecondary)
-                    .padding(.top, 10)
-            }
-        }
-        .sampling([.fans, .temperatureSummary], engine: store.engine)
-        .task { await control.refresh() }
-    }
-
-    @ViewBuilder private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if fanSettings.linked {
-                FanPresetPicker(control: control)
-            } else {
-                ForEach(0..<store.availability.fanCount, id: \.self) { fan in
-                    HStack {
-                        Text("Fan \(fan + 1)").frame(width: 60, alignment: .leading)
-                        FanPresetPicker(control: control, fan: fan)
-                    }
-                }
-            }
-            if store.availability.fanCount > 1 {
-                Toggle(String(localized: "Same setting for all fans"), isOn: Binding(
-                    get: { fanSettings.linked },
-                    set: { control.setLinked($0) }
-                ))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-            }
-            if fanSettings.preset == .constant {
-                HStack {
-                    Text("Speed")
-                    Slider(
-                        value: Binding(get: { fanSettings.constantPercent }, set: { control.setConstant(percent: $0) }),
-                        in: 0...100,
-                        step: 5
-                    )
-                    .controlSize(.small)
-                    .accessibilityLabel(String(localized: "Constant fan speed"))
-                    Text(constantLabel).monospacedDigit().frame(width: 120, alignment: .trailing)
-                }
-            }
-            if let curve = shownCurve {
-                HStack {
-                    Text("Follow")
-                    Picker("", selection: Binding(get: { fanSettings.sensor }, set: { control.setSensor($0) })) {
-                        ForEach(sensorOptions, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .labelsHidden()
-                    .frame(width: 200)
-                    Spacer()
-                    Button(String(localized: "Import…"), action: importPresets)
-                    Button(String(localized: "Export…"), action: exportPreset)
-                }
-                .buttonStyle(InstrumentButtonStyle())
-                CurveEditor(curve: curve, isEditable: true, currentTemperature: controlTemperature) { control.setCustomCurve($0) }
-                SavedCurves(control: control, saved: fanSettings.saved)
-            }
-            if store.availability.hasBattery {
-                AutoSwitchRow(context: context)
-            }
-        }
-        .padding(.top, 14)
-    }
-
-    /// The slider runs from the fan's hardware minimum to its maximum. Only macOS can stop a fan, in Auto.
-    private var constantLabel: String {
-        guard let fan = store.fans.current.first else { return "\(Int(fanSettings.constantPercent))%" }
-        let rpm = CurveMath.rpm(percent: fanSettings.constantPercent, minimum: fan.minimumRPM, maximum: fan.maximumRPM)
-        let text = "\(Format.rpm(rpm)) rpm"
-        return fanSettings.constantPercent == 0 ? String(localized: "\(text) (minimum)") : text
-    }
-
     private var sensorOptions: [(ControlSensor, String)] {
-        let summary = store.sensors.summary
+        let summary = context.store.sensors.summary
         var options: [(ControlSensor, String)] = [(.hottest, String(localized: "Hottest sensor"))]
         if summary?.cpuHottest != nil {
             options.append((.cpuHottest, String(localized: "CPU hottest")))
@@ -150,45 +265,50 @@ struct FansPage: View {
         return options
     }
 
-    private func exportPreset() {
-        guard let curve = shownCurve else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(fanSettings.preset.title).json"
-        panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let preset = NamedPreset(name: fanSettings.preset.title, curve: curve, sensor: fanSettings.sensor)
-        if let data = try? PresetFile.encode([preset]) { try? data.write(to: url, options: .atomic) }
-    }
-
-    private func importPresets() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
-        guard panel.runModal() == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else { return }
-        if case let .success(presets) = PresetFile.decode(data) {
-            let names = Set(presets.map(\.name))
-            context.settings.stored.fan.saved.removeAll { names.contains($0.name) }
-            context.settings.stored.fan.saved.append(contentsOf: presets)
-        } else {
-            NSSound.beep()
+    var body: some View {
+        Card {
+            HStack {
+                Text(String(localized: "Curve “\(fanSettings.preset.title)”")).font(.headline)
+                Spacer()
+                Picker(String(localized: "Temperature source"), selection: Binding(get: { fanSettings.sensor }, set: { control.setSensor($0) })) {
+                    ForEach(sensorOptions, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .fixedSize()
+            }
+            CurveEditor(curve: curve, isEditable: true, currentTemperature: controlTemperature, unit: context.unit) { control.setCustomCurve($0) }
+            Text(fanSettings.preset == .custom
+                 ? String(localized: "Drag points to edit. Double-click empty space to add a point, or a point to remove it.")
+                 : String(localized: "Editing a built-in curve starts a Custom curve from it."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Divider()
+            SavedCurves(context: context)
         }
     }
 }
 
 /// Named curves. Click to use, right-click to rename or delete.
 private struct SavedCurves: View {
-    let control: ControlModel
-    let saved: [NamedPreset]
+    let context: AppContext
     @State private var isSaving = false
     @State private var renaming: String?
     @State private var name = ""
 
+    private var control: ControlModel { context.control }
+    private var saved: [NamedPreset] { context.settings.stored.fan.saved }
+
     var body: some View {
         HStack(spacing: 8) {
-            Text("Saved").foregroundStyle(Color.tkSecondary)
+            Text("Saved").foregroundStyle(.secondary)
+            if saved.isEmpty {
+                Text("None yet").foregroundStyle(.tertiary)
+            }
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ForEach(saved, id: \.name) { preset in
                         Button(preset.name) { control.applySavedCurve(preset) }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.capsule)
                             .contextMenu {
                                 Button(String(localized: "Rename…")) {
                                     name = preset.name
@@ -200,12 +320,19 @@ private struct SavedCurves: View {
                 }
             }
             .scrollIndicators(.hidden)
-            Button(String(localized: "Save curve…")) {
-                name = ""
-                isSaving = true
+            Menu {
+                Button(String(localized: "Save Current Curve…")) {
+                    name = ""
+                    isSaving = true
+                }
+                Divider()
+                Button(String(localized: "Import…"), action: importPresets)
+                Button(String(localized: "Export Current Curve…"), action: exportPreset)
+            } label: {
+                Label(String(localized: "Curves"), systemImage: "ellipsis.circle")
             }
+            .fixedSize()
         }
-        .buttonStyle(InstrumentButtonStyle())
         .alert(String(localized: "Save curve"), isPresented: $isSaving) {
             TextField(String(localized: "Name"), text: $name)
             Button(String(localized: "Save")) { control.saveCurve(named: name) }
@@ -219,77 +346,65 @@ private struct SavedCurves: View {
             Button(String(localized: "Cancel"), role: .cancel) {}
         }
     }
+
+    private func exportPreset() {
+        let fan = context.settings.stored.fan
+        guard let curve = fan.preset == .custom ? fan.customCurve : fan.preset.curve else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(fan.preset.title).json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let preset = NamedPreset(name: fan.preset.title, curve: curve, sensor: fan.sensor)
+        if let data = try? PresetFile.encode([preset]) { try? data.write(to: url, options: .atomic) }
+    }
+
+    private func importPresets() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url,
+              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 1_000_000,
+              let data = try? Data(contentsOf: url) else { return }
+        if case let .success(presets) = PresetFile.decode(data) {
+            let valid = presets.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.prefix(50)
+            let names = Set(valid.map(\.name))
+            context.settings.stored.fan.saved.removeAll { names.contains($0.name) }
+            context.settings.stored.fan.saved.append(contentsOf: valid)
+        } else {
+            NSSound.beep()
+        }
+    }
 }
 
 private struct AutoSwitchRow: View {
     let context: AppContext
 
     private var fan: FanSettings { context.settings.stored.fan }
-
     private var presets: [FanPreset] { [.system, .silent, .balanced, .performance, .maximum] }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Toggle(String(localized: "Switch by power source"), isOn: Binding(
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(String(localized: "Switch mode by power source"), isOn: Binding(
                 get: { fan.switchByPowerSource },
                 set: { context.settings.stored.fan.switchByPowerSource = $0 }
             ))
             .toggleStyle(.switch)
-            .controlSize(.small)
             if fan.switchByPowerSource {
-                Spacer()
-                picker(String(localized: "Adapter"), \.presetOnAdapter)
-                picker(String(localized: "Battery"), \.presetOnBattery)
+                HStack(spacing: 16) {
+                    picker(String(localized: "On adapter"), \.presetOnAdapter)
+                    picker(String(localized: "On battery"), \.presetOnBattery)
+                    Spacer()
+                }
             }
         }
     }
 
     private func picker(_ title: String, _ path: WritableKeyPath<FanSettings, FanPreset>) -> some View {
-        HStack(spacing: 6) {
-            Text(title).foregroundStyle(Color.tkSecondary)
-            Picker("", selection: Binding(
-                get: { context.settings.stored.fan[keyPath: path] },
-                set: { context.settings.stored.fan[keyPath: path] = $0 }
-            )) {
-                ForEach(presets, id: \.self) { Text($0.title).tag($0) }
-            }
-            .labelsHidden()
-            .frame(width: 120)
+        Picker(title, selection: Binding(
+            get: { context.settings.stored.fan[keyPath: path] },
+            set: { context.settings.stored.fan[keyPath: path] = $0 }
+        )) {
+            ForEach(presets, id: \.self) { Text($0.title).tag($0) }
         }
-    }
-}
-
-private struct FanRow: View {
-    let fan: FanSnapshot
-    let target: Double?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Hairline()
-            HStack(alignment: .firstTextBaseline) {
-                Text("Fan \(fan.index + 1)").foregroundStyle(Color.tkSecondary)
-                Spacer()
-                if let target {
-                    Text("Target \(Format.rpm(target))").font(.system(size: 12)).foregroundStyle(Color.tkSecondary).monospacedDigit()
-                }
-                if fan.actualRPM == 0 {
-                    BigNumber(value: String(localized: "Stopped"))
-                } else {
-                    BigNumber(value: Format.rpm(fan.actualRPM), unit: "rpm")
-                }
-            }
-            .padding(.top, 8)
-            MeterBar(fraction: fan.maximumRPM > 0 ? fan.actualRPM / fan.maximumRPM : 0)
-            HStack {
-                Text("Min \(Format.rpm(fan.minimumRPM))")
-                Spacer()
-                Text("Max \(Format.rpm(fan.maximumRPM))")
-            }
-            .font(.system(size: 12))
-            .foregroundStyle(Color.tkSecondary)
-            .monospacedDigit()
-        }
-        .padding(.bottom, 12)
-        .accessibilityElement(children: .combine)
+        .fixedSize()
     }
 }

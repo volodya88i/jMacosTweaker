@@ -68,10 +68,10 @@ final class ValidationTests: XCTestCase {
 }
 
 final class ClientVerifierTests: XCTestCase {
-    private let pin = PinnedClient(cdhash: "abc123", path: "/Applications/jMacosTweaker.app/Contents/MacOS/jMacosTweaker")
+    private let pin = PinnedClient(cdhash: "419f9496a28fc8dba4e02737fea7926e22cdbf4d", path: "/Applications/jMacosTweaker.app/Contents/MacOS/jMacosTweaker")
 
     private func identity() -> ClientIdentity {
-        ClientIdentity(cdhash: "ABC123", path: pin.path, pathOwnedByRoot: true, pathWritableByOthers: false, hasHardenedRuntime: true, allowsDebugging: false)
+        ClientIdentity(cdhash: "419F9496A28FC8DBA4E02737FEA7926E22CDBF4D", path: pin.path, pathOwnedByRoot: true, pathWritableByOthers: false, hasHardenedRuntime: true, allowsDebugging: false)
     }
 
     // Invariant 2.
@@ -80,7 +80,7 @@ final class ClientVerifierTests: XCTestCase {
         XCTAssertEqual(ClientVerifier.check(identity: identity(), pin: nil), .noPin)
         XCTAssertEqual(ClientVerifier.check(identity: nil, pin: pin), .unreadableIdentity)
         var other = identity()
-        other.cdhash = "ffff"
+        other.cdhash = String(repeating: "f", count: 40)
         XCTAssertEqual(ClientVerifier.check(identity: other, pin: pin), .hashMismatch)
         other = identity()
         other.path = "/tmp/evil"
@@ -102,7 +102,17 @@ final class ClientVerifierTests: XCTestCase {
     func testEmptyPinNeverMatches() {
         var value = identity()
         value.cdhash = ""
-        XCTAssertEqual(ClientVerifier.check(identity: value, pin: PinnedClient(cdhash: "", path: pin.path)), .hashMismatch)
+        XCTAssertEqual(ClientVerifier.check(identity: value, pin: PinnedClient(cdhash: "", path: pin.path)), .malformedPin)
+    }
+
+    /// The pin is placed inside a code signing requirement, so text that could close the quote must be refused.
+    func testMalformedPinIsRefusedBeforeUse() {
+        let injected = PinnedClient(cdhash: "00\" or anchor apple or cdhash H\"00", path: pin.path)
+        XCTAssertEqual(ClientVerifier.check(identity: identity(), pin: injected), .malformedPin)
+        XCTAssertEqual(ClientVerifier.check(identity: identity(), pin: PinnedClient(cdhash: "abc123", path: pin.path)), .malformedPin)
+        XCTAssertEqual(ClientVerifier.check(identity: identity(), pin: PinnedClient(cdhash: pin.cdhash, path: "relative/path")), .malformedPin)
+        XCTAssertTrue(ClientVerifier.isWellFormedHash(String(repeating: "a", count: 64)))
+        XCTAssertFalse(ClientVerifier.isWellFormedHash(String(repeating: "g", count: 40)))
     }
 }
 
@@ -242,6 +252,52 @@ final class FailSafeTests: XCTestCase {
         core.tick(now: 6)
         assertSystemControl(port)
         XCTAssertNotNil(core.lastError)
+    }
+
+    /// Constant needs no control sensor, but the supervisor still needs temperatures to protect anything.
+    func testConstantSpeedReturnsToSystemWhenTemperaturesVanish() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(allFans(.constant(percent: 0)), now: 0)
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 1)
+        inputs.cpu = nil
+        inputs.gpu = nil
+        core.heartbeat(now: 3)
+        core.tick(now: 3)
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 1, "a brief gap is tolerated")
+        core.heartbeat(now: 6)
+        core.tick(now: 6)
+        assertSystemControl(port)
+        XCTAssertNil(core.status(protocolVersion: 1).fanRequest)
+        XCTAssertNotNil(core.lastError)
+    }
+
+    func testMaximumNeedsNoTemperatures() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        inputs.cpu = nil
+        inputs.gpu = nil
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(allFans(.maximum), now: 0)
+        for second in 1...10 {
+            core.heartbeat(now: TimeInterval(second))
+            core.tick(now: TimeInterval(second))
+        }
+        XCTAssertEqual(port.value(FanKeys.target(0)), 7826)
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 1)
+    }
+
+    func testCurveWithNoReadingYetStaysUnderSystemControl() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        inputs.cpu = nil
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(allFans(.curve(balancedCurve)), now: 0)
+        XCTAssertFalse(port.writes.contains { $0.key == FanKeys.mode(0) }, "no manual mode without a target to command")
     }
 
     func testImplausibleSensorCountsAsDropout() {

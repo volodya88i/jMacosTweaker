@@ -20,12 +20,13 @@ enum AccentChoice: Codable, Hashable, Sendable, CaseIterable {
     case none, blue, violet, teal, green, pink
     case custom(UInt32)
 
-    /// The presets. Custom is offered separately through a color well.
+    /// The presets. Custom is offered separately through a color well. `none` follows the system accent color; the
+    /// case keeps its name so settings saved by earlier versions still load.
     static let allCases: [AccentChoice] = [.none, .blue, .violet, .teal, .green, .pink]
 
     var title: String {
         switch self {
-        case .none: String(localized: "None")
+        case .none: String(localized: "System")
         case .blue: String(localized: "Blue")
         case .violet: String(localized: "Violet")
         case .teal: String(localized: "Teal")
@@ -202,7 +203,6 @@ final class AppSettings {
     struct Stored: Codable, Sendable {
         var schema = 1
         var accent = AccentChoice.none
-        var accentDividers = false
         var appearance = AppearanceChoice.system
         var temperatureUnit = TemperatureUnit.celsius
         var widgets = Module.allCases.map(WidgetConfig.standard)
@@ -225,7 +225,6 @@ final class AppSettings {
             let base = Stored()
             schema = value(.schema, base.schema)
             accent = value(.accent, base.accent)
-            accentDividers = value(.accentDividers, base.accentDividers)
             appearance = value(.appearance, base.appearance)
             temperatureUnit = value(.temperatureUnit, base.temperatureUnit)
             widgets = value(.widgets, base.widgets)
@@ -255,7 +254,9 @@ final class AppSettings {
         }
     }
 
-    /// Adds modules introduced after the file was written, and drops duplicates.
+    /// Adds modules introduced after the file was written, drops duplicates, and brings every number back into the range
+    /// the UI can set. Settings files are imported from anywhere, and defaults can be edited by hand: an update interval
+    /// of 0 would make the sampler spin.
     static func normalized(_ value: Stored) -> Stored {
         var result = value
         var seen = Set<Module>()
@@ -265,6 +266,31 @@ final class AppSettings {
             config.enabled = false
             result.widgets.append(config)
         }
+        for index in result.widgets.indices {
+            var config = result.widgets[index]
+            config.interval = config.interval.isFinite ? min(max(config.interval, 1), 60) : config.module.defaultInterval
+            if let value = config.warningAt, !value.isFinite { config.warningAt = nil }
+            if let value = config.criticalAt, !value.isFinite { config.criticalAt = nil }
+            switch config.visibility {
+            case let .above(limit) where !limit.isFinite, let .below(limit) where !limit.isFinite:
+                config.visibility = .always
+            default:
+                break
+            }
+            result.widgets[index] = config
+        }
+        result.highTemperatureAt = result.highTemperatureAt.isFinite ? min(max(result.highTemperatureAt, 40), 120) : 95
+        let percent = result.fan.constantPercent
+        result.fan.constantPercent = percent.isFinite ? min(max(percent, 0), 100) : 0
+        if case .failure = CurveMath.validate(result.fan.customCurve) {
+            result.fan.customCurve = FanPreset.balanced.curve ?? result.fan.customCurve
+        }
+        result.fan.saved.removeAll { preset in
+            if case .failure = CurveMath.validate(preset.curve) { return true }
+            return preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        result.fan.perFan = result.fan.perFan.filter { (0..<10).contains($0.key) }
+        result.charge = ChargeStateMachine.clamped(result.charge)
         return result
     }
 

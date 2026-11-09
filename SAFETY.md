@@ -75,6 +75,23 @@ use, after the restore, and the helper logs when it finishes restoring and start
 
 Macs Fan Control's helper loads at boot, so fan control was correctly blocked when the app reopened at login.
 
+## Review of 2026-11-09
+
+| Finding | Risk | Change |
+| --- | --- | --- |
+| With Constant or Custom and every temperature unreadable, fans kept their speed and the supervisor saw nothing | Invariants 3 and 4 | Fans return to system control after 5 s without a CPU or GPU reading, unless every policy is Max. `testConstantSpeedReturnsToSystemWhenTemperaturesVanish` |
+| A curve entered manual mode before it had a temperature, leaving the fan at the unlock target | Invariant 5 | A curve waits for a reading. `testCurveWithNoReadingYetStaysUnderSystemControl` |
+| `install_helper.sh` checked entitlements on the user-writable source before copying it | A swap between check and copy | All checks run on a root-owned staged copy: `codesign --verify --strict --deep`, identifier, hardened runtime on app and helper, no `get-task-allow` |
+| The LaunchDaemon plist was copied from the script's folder, which can be user-writable | Root code execution through an edited plist | The script writes the plist itself and lints it |
+| The pinned hash went unchecked into `setCodeSigningRequirement` | Requirement injection, if the root-owned pin file were ever wrong | `ClientVerifier` refuses anything but 40 or 64 hex characters. `testMalformedPinIsRefusedBeforeUse` |
+| One slow helper reply stopped the app's heartbeat for good | Fans handed back unexpectedly (fails safe, but wrong) | The heartbeat survives up to 6 missed beats |
+| Imported settings were not range-checked | An interval of 0 would make sampling spin | `AppSettings.normalized` clamps every number |
+| Placeholder temperatures passed the 1 to 130 °C check: 1.5 to 8.3 °C, and exactly 40.0 from every P-cluster sensor while the cluster is powered down | Wrong minimums; worse, a CPU really at 90 °C could read 40.0 to the supervisor | Placeholders are rejected per sample: floor, exact 40.0 on a die, identical die readings, median check |
+| Sensors asleep when the list was built, such as the GPU's at idle, were missing for the whole session | The supervisor never saw the GPU | They wait and join when they first report a real value; the helper rebuilds its groups when that happens. Verified on Mac16,8: all 45 P and 22 GPU sensors listed, no exact 40.0 accepted, lowest accepted value 24 °C |
+
+Not changed, and why: `FileStore` sets 0600 after an atomic write, so a journal is briefly world-readable; it holds no
+secrets. The native charge limit client leaks one object once per launch through its private `alloc`/`init` path.
+
 ## Known weaknesses
 
 - **Client verification is weaker without a Developer ID.** Ad-hoc signing has no team identity. The helper relies
