@@ -14,6 +14,11 @@ struct RootView: View {
             page
                 .frame(minWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
         }
+        // One toolbar for the whole window, attached outside the page switch and never changed by a page. Rebuilding it
+        // on every switch was slow, and a page without it made the title bar shorter, so the window buttons jumped.
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { RestoreButton(control: context.control) }
+        }
         .environment(\.dataTint, context.dataTint)
         .sheet(isPresented: Binding(
             get: { !context.settings.stored.hasCompletedOnboarding && !CommandLine.arguments.contains("--snapshots") },

@@ -9,21 +9,21 @@ struct PerformancePage: View {
     var body: some View {
         PageScroll {
             HStack(alignment: .top, spacing: 14) {
-                Card { CPUDetail(model: store.cpu, frequency: store.frequency) }
-                Card { MemoryDetail(model: store.memory) }
+                Card(fillsHeight: true) { CPUDetail(model: store.cpu, frequency: store.frequency) }
+                Card(fillsHeight: true) { MemoryDetail(model: store.memory) }
             }
             .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 14) {
                 if store.availability.hasGPU {
-                    Card { GPUDetail(model: store.gpu, frequency: store.frequency) }
+                    Card(fillsHeight: true) { GPUDetail(model: store.gpu, frequency: store.frequency) }
                 }
-                Card { ThroughputDetail(kind: .network, model: store.network) }
-                Card { ThroughputDetail(kind: .disk, model: store.disk) }
+                Card(fillsHeight: true) { ThroughputDetail(kind: .network, model: store.network) }
+                Card(fillsHeight: true) { ThroughputDetail(kind: .disk, model: store.disk) }
             }
             .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .top, spacing: 14) {
-                Card { ProcessList(model: store.processes, metric: .cpu) }
-                Card { ProcessList(model: store.processes, metric: .memory) }
+                Card(fillsHeight: true) { ProcessList(model: store.processes, metric: .cpu) }
+                Card(fillsHeight: true) { ProcessList(model: store.processes, metric: .memory) }
             }
             .fixedSize(horizontal: false, vertical: true)
             Text("Processes of other users and of the system need root to read, so only your own are listed.")

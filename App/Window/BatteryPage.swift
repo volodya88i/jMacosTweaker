@@ -43,7 +43,6 @@ struct BatteryPage: View {
                     .frame(maxWidth: .infinity, minHeight: 300)
             }
         }
-        .navigationSubtitle(model.current.map { BatteryText.detail($0, limit: context.control.nativeChargeLimit, flow: model.flow) } ?? "")
         .sampling([.battery, .power], engine: context.engine)
         .task { await context.control.refresh() }
     }

@@ -34,6 +34,41 @@ struct SensorsPage: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            controls
+            Divider()
+            list
+        }
+        .sampling(showAll ? [.temperatureFull, .electrical, .fans] : [.temperatureFull, .fans], every: 2, engine: context.engine)
+    }
+
+    /// In the page rather than the toolbar, so switching to this page does not rebuild the window's toolbar.
+    private var controls: some View {
+        HStack(spacing: 12) {
+            Picker(String(localized: "Sensors shown"), selection: $showAll) {
+                Text("Main").tag(false)
+                Text("All").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help(String(localized: "Main shows the sensors that matter. All lists every raw sensor."))
+            Spacer()
+            TextField(String(localized: "Search sensors"), text: $search)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 220)
+            Button {
+                model.resetStatistics()
+            } label: {
+                Label(String(localized: "Reset Min and Max"), systemImage: "arrow.counterclockwise")
+            }
+            .help(String(localized: "Starts minimum, average and maximum over from now"))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var list: some View {
         List {
             if showAll {
                 ForEach(rawGroups, id: \.group) { entry in
@@ -70,28 +105,14 @@ struct SensorsPage: View {
                 ContentUnavailableView.search(text: query)
             }
         }
-        .navigationSubtitle(subtitle)
-        .searchable(text: $search, placement: .toolbar, prompt: String(localized: "Search sensors"))
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker(String(localized: "Sensors shown"), selection: $showAll) {
-                    Text("Main").tag(false)
-                    Text("All").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-                .help(String(localized: "Main shows the sensors that matter. All lists every raw sensor."))
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.resetStatistics()
-                } label: {
-                    Label(String(localized: "Reset Min and Max"), systemImage: "arrow.counterclockwise")
-                }
-                .help(String(localized: "Starts minimum, average and maximum over from now"))
-            }
+        .safeAreaInset(edge: .bottom) {
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 6)
         }
-        .sampling(showAll ? [.temperatureFull, .electrical, .fans] : [.temperatureFull, .fans], every: 2, engine: context.engine)
     }
 }
 

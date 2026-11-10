@@ -6,13 +6,15 @@ import SwiftUI
 /// A rounded group, the same color as a grouped `Form` section in both appearances.
 struct Card<Content: View>: View {
     var padding: CGFloat = Tokens.Size.cardPadding
+    /// Fills the row's height, for rows sized to their tallest card. Off by default: a flexible height on every card
+    /// makes SwiftUI measure each nested card several times per layout pass.
+    var fillsHeight = false
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) { content }
             .padding(padding)
-            // Fills the row's height when a row is sized to its tallest card, so neighbors line up.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: Tokens.Size.cardRadius, style: .continuous))
     }
 }
@@ -101,7 +103,6 @@ struct BigValue: View {
         }
         .monospacedDigit()
         .lineLimit(1)
-        .minimumScaleFactor(0.7)
     }
 }
 
@@ -172,9 +173,15 @@ struct SettingsIcon: View {
     var size: CGFloat = 20
 
     var body: some View {
+        // Scaled to fit a fixed box, so every glyph sits optically centered whatever its shape. Sizing by font
+        // instead aligns glyphs to a text baseline, which left tall or wide ones visibly off-center.
         Image(systemName: symbol)
-            .font(.system(size: size * 0.55, weight: .semibold))
+            .resizable()
+            .scaledToFit()
+            .fontWeight(.semibold)
+            .symbolRenderingMode(.monochrome)
             .foregroundStyle(.white)
+            .frame(width: size * 0.6, height: size * 0.6)
             .frame(width: size, height: size)
             .background(color.gradient, in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
             .accessibilityHidden(true)

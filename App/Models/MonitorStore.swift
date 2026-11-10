@@ -189,9 +189,13 @@ final class SensorsModel {
         }
     }
 
+    /// Builds the new statistics aside and assigns them once. Writing per sensor notified every row that reads
+    /// statistics once per sensor: about 270 times 270 notifications every 2 s with all sensors shown.
     func apply(readings: [SensorReading], now: TimeInterval) {
-        for reading in readings { record(id: reading.id, value: reading.value, now: now) }
-        updateCurated(now: now)
+        var updated = stats
+        for reading in readings { Self.record(&updated, id: reading.id, value: reading.value, now: now) }
+        Self.updateCurated(&updated, curated: curated, now: now)
+        stats = updated
     }
 
     /// A new list arrives when sensors that were powered down at launch, such as the GPU's, report for the first time.
@@ -213,18 +217,18 @@ final class SensorsModel {
     }
 
     /// Aggregate rows get the same statistics as real sensors, computed only from sensors seen in this batch's window.
-    private func updateCurated(now: TimeInterval) {
+    private static func updateCurated(_ stats: inout [SensorID: SensorStats], curated: [CuratedSensor], now: TimeInterval) {
         guard !curated.isEmpty else { return }
         var values: [SensorID: Double] = [:]
         values.reserveCapacity(stats.count)
         for (id, entry) in stats where now - entry.lastSeen < 5 { values[id] = entry.latest }
         for sensor in curated where sensor.members.count > 1 {
             guard let value = sensor.value(from: values) else { continue }
-            record(id: sensor.id, value: value, now: now)
+            record(&stats, id: sensor.id, value: value, now: now)
         }
     }
 
-    private func record(id: SensorID, value: Double, now: TimeInterval) {
+    private static func record(_ stats: inout [SensorID: SensorStats], id: SensorID, value: Double, now: TimeInterval) {
         if var entry = stats[id] {
             entry.latest = value
             entry.minimum = min(entry.minimum, value)

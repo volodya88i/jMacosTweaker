@@ -10,6 +10,7 @@ enum DebugSnapshots {
     static func runIfRequested(context: AppContext, settings: AppSettings) {
         let arguments = CommandLine.arguments
         if arguments.contains("--open-window") { context.openWindow(.dashboard) }
+        if arguments.contains("--benchmark") { Task { await benchmark(context: context) } }
         guard let flag = arguments.firstIndex(of: "--snapshots"), arguments.indices.contains(flag + 1) else { return }
         let directory = URL(fileURLWithPath: arguments[flag + 1])
         if arguments.contains("--accent") { settings.stored.accent = .blue }
@@ -32,6 +33,33 @@ enum DebugSnapshots {
             }
             NSApp.terminate(nil)
         }
+    }
+
+    /// `--benchmark` switches pages in the real window, moved off screen, and reports how long the main thread stayed
+    /// blocked after each switch. A background thread pings the main queue every 10 ms; a late reply is a stall.
+    private static func benchmark(context: AppContext) async {
+        context.openWindow(.dashboard)
+        try? await Task.sleep(for: .seconds(2))
+        if !CommandLine.arguments.contains("--onscreen") {
+            NSApp.windows.first { $0.title == context.section.title }?.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+        }
+        let monitor = StallMonitor()
+        monitor.start()
+        try? await Task.sleep(for: .seconds(2))
+        for round in 1...3 {
+            for section in WindowSection.allCases where context.isAvailable(section) {
+                monitor.reset()
+                let start = ContinuousClock.now
+                context.section = section
+                await Task.yield()
+                let set = ContinuousClock.now - start
+                try? await Task.sleep(for: .milliseconds(1500))
+                print(String(format: "round %d %-12@ worst stall %4.0f ms, total stalled %5.0f ms, set %3.0f ms",
+                             round, section.rawValue, monitor.worst * 1000, monitor.total * 1000, Double(set.components.attoseconds) / 1e15))
+            }
+        }
+        monitor.stop()
+        NSApp.terminate(nil)
     }
 
     /// The real window, toolbar included, captured from its frame view.
@@ -96,5 +124,34 @@ enum DebugSnapshots {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: url)
     }
+}
+/// Measures how late the main queue answers. Debug builds only.
+final class StallMonitor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var running = false
+    private var worstValue = 0.0
+    private var totalValue = 0.0
+
+    var worst: Double { lock.withLock { worstValue } }
+    var total: Double { lock.withLock { totalValue } }
+
+    func reset() { lock.withLock { worstValue = 0; totalValue = 0 } }
+
+    func start() {
+        lock.withLock { running = true }
+        Thread.detachNewThread { [self] in
+            while lock.withLock({ running }) {
+                let sent = ProcessInfo.processInfo.systemUptime
+                let done = DispatchSemaphore(value: 0)
+                DispatchQueue.main.async { done.signal() }
+                done.wait()
+                let late = ProcessInfo.processInfo.systemUptime - sent
+                if late > 0.016 { lock.withLock { worstValue = max(worstValue, late); totalValue += late } }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+        }
+    }
+
+    func stop() { lock.withLock { running = false } }
 }
 #endif

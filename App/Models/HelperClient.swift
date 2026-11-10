@@ -49,6 +49,12 @@ final class HelperClient {
         return active.remoteObjectProxyWithErrorHandler(onError) as? any HelperXPC
     }
 
+    /// Writes only real changes. Every write to an observed property redraws each view that reads it, and the helper
+    /// answers with the same status every few seconds.
+    private func update<Value: Equatable>(_ path: ReferenceWritableKeyPath<HelperClient, Value>, _ value: Value) {
+        if self[keyPath: path] != value { self[keyPath: path] = value }
+    }
+
     private func connectionLost() {
         connection = nil
         if state == .running { state = .notResponding }
@@ -57,21 +63,21 @@ final class HelperClient {
     /// Works out the state without trusting anything the helper says about itself.
     func refresh() async {
         guard FileManager.default.fileExists(atPath: HelperPaths.launchDaemon) else {
-            state = .notInstalled
-            status = nil
+            update(\.state, .notInstalled)
+            update(\.status, nil)
             return
         }
         if let data = FileManager.default.contents(atPath: HelperPaths.pinFile),
            let pin = try? JSONDecoder().decode(PinnedClient.self, from: data),
-           let own = Self.ownCodeHash() {
+           let own = Self.ownCodeHash {
             guard own.lowercased() == pin.cdhash.lowercased() else {
-                state = .needsRepin
-                status = nil
+                update(\.state, .needsRepin)
+                update(\.status, nil)
                 return
             }
             guard Bundle.main.bundlePath == HelperPaths.installedApp else {
-                state = .notInstalledCopy
-                status = nil
+                update(\.state, .notInstalledCopy)
+                update(\.status, nil)
                 return
             }
         }
@@ -109,18 +115,18 @@ final class HelperClient {
             }
         }
         guard let data, let reply = try? JSONDecoder().decode(HelperReply.self, from: data) else {
-            state = .notResponding
-            status = nil
+            update(\.state, .notResponding)
+            update(\.status, nil)
             return
         }
         guard reply.status.protocolVersion == helperProtocolVersion else {
-            state = .outdated
-            status = nil
+            update(\.state, .outdated)
+            update(\.status, nil)
             return
         }
-        state = .running
-        status = reply.status
-        lastError = reply.error ?? reply.status.lastError
+        update(\.state, .running)
+        update(\.status, reply.status)
+        update(\.lastError, reply.error ?? reply.status.lastError)
     }
 
     /// Runs only while fans are under control. If it stops, the helper hands the fans back. Invariant 3.
@@ -165,7 +171,10 @@ final class HelperClient {
         activity = nil
     }
 
-    private static func ownCodeHash() -> String? {
+    /// This build's code hash. It cannot change while the app runs, so it is read once.
+    private static let ownCodeHash: String? = readOwnCodeHash()
+
+    private static func readOwnCodeHash() -> String? {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
         var staticCode: SecStaticCode?

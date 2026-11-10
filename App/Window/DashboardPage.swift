@@ -44,9 +44,6 @@ struct DashboardPage: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) { RestoreButton(control: context.control) }
-        }
         .sampling(sources, engine: store.engine)
     }
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.1 - 2026-11-10
+
+- The window's title bar keeps one height on every page, so the window buttons no longer jump between pages. Restore
+  System Defaults is now in the toolbar of every page; page subtitles moved into the pages.
+- Icons in colored tiles are centered and evenly sized, in the sidebar and on the Menu Bar page.
+- The temperature chart gives each area its own color (CPU orange, GPU purple, SSD teal, battery green) instead of
+  dashed lines.
+- Faster page switching. The window has one toolbar that pages never change; the Sensors controls moved into the page.
+  Cards no longer stretch to fill their row except where a row lines them up, big numbers no longer shrink-to-fit,
+  sensor statistics are written once per sample instead of once per sensor, repeated helper and charge limit replies
+  no longer redraw the page, and Settings reads the login item state once instead of on every redraw. Measured with
+  `--benchmark` (debug builds): Sensors 86 to 125 ms per switch before, 60 to 95 ms after.
+
 ## 0.2.0 - 2026-11-09
 
 Design

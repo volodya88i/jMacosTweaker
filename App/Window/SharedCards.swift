@@ -83,20 +83,18 @@ struct TemperatureCard: View {
     }
 }
 
-/// Recent temperatures of each area in one chart. Series differ by dash, not only by color, so they stay readable for
-/// everyone and in either appearance.
+/// Recent temperatures of each area in one chart, one system color per area. The legend repeats each color with the
+/// current value, so a reading never depends on telling colors apart alone.
 struct TemperatureChart: View {
     let context: AppContext
     var height: CGFloat = 70
 
-    @Environment(\.dataTint) private var tint
-
-    private static func dash(_ area: TemperatureArea) -> [CGFloat] {
+    static func color(_ area: TemperatureArea) -> Color {
         switch area {
-        case .cpu: []
-        case .gpu: [5, 3]
-        case .ssd: [1.5, 2.5]
-        case .battery: [8, 3, 1.5, 3]
+        case .cpu: .orange
+        case .gpu: .purple
+        case .ssd: .teal
+        case .battery: .green
         }
     }
 
@@ -107,13 +105,9 @@ struct TemperatureChart: View {
             HStack(spacing: 12) {
                 ForEach(areas) { area in
                     HStack(spacing: 4) {
-                        Canvas { graphics, size in
-                            var path = Path()
-                            path.move(to: CGPoint(x: 0, y: size.height / 2))
-                            path.addLine(to: CGPoint(x: size.width, y: size.height / 2))
-                            graphics.stroke(path, with: .color(tint), style: StrokeStyle(lineWidth: 1.5, dash: Self.dash(area)))
-                        }
-                        .frame(width: 14, height: 6)
+                        Circle()
+                            .fill(Self.color(area))
+                            .frame(width: 7, height: 7)
                         Text(area.title).foregroundStyle(.secondary)
                         Text(Format.temperature(sensors.summary.flatMap(area.value), unit: context.unit))
                             .monospacedDigit()
@@ -157,7 +151,7 @@ struct TemperatureChart: View {
                         if drawing { path.addLine(to: point) } else { path.move(to: point) }
                         drawing = true
                     }
-                    graphics.stroke(path, with: .color(area == .cpu ? tint : tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: Self.dash(area)))
+                    graphics.stroke(path, with: .color(Self.color(area)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                 }
             }
             .frame(height: height)

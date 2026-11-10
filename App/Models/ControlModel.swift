@@ -46,7 +46,8 @@ final class ControlModel {
     }
 
     func refresh() async {
-        conflicts = await Task.detached { ConflictDetector.detect() }.value
+        let found = await Task.detached { ConflictDetector.detect() }.value
+        if found != conflicts { conflicts = found }
         await refreshNativeCharge()
         await helper.refresh()
     }
@@ -259,11 +260,11 @@ final class ControlModel {
     // MARK: Native charge limit
 
     private func refreshNativeCharge() async {
-        defer { nativeChargeChecked = true }
+        defer { if !nativeChargeChecked { nativeChargeChecked = true } }
         guard let client = nativeChargeClient else { return }
         let state = await Task.detached { (client.availableLimits(), client.currentLimit()) }.value
-        nativeChargeOptions = state.0
-        nativeChargeLimit = state.1
+        if nativeChargeOptions != state.0 { nativeChargeOptions = state.0 }
+        if nativeChargeLimit != state.1 { nativeChargeLimit = state.1 }
     }
 
     func setNativeChargeLimit(_ value: Int) {

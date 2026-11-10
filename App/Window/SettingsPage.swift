@@ -159,7 +159,9 @@ private struct AccentPicker: View {
 }
 
 private struct LaunchAtLoginToggle: View {
-    @State private var enabled = SMAppService.mainApp.status == .enabled
+    // Read once when the row appears. As an initial value it was asked of the system on every redraw of the page,
+    // because SwiftUI evaluates that expression each time the view is created.
+    @State private var enabled = false
     @State private var failed = false
 
     var body: some View {
@@ -181,5 +183,6 @@ private struct LaunchAtLoginToggle: View {
                     .foregroundStyle(.orange)
             }
         }
+        .task { enabled = SMAppService.mainApp.status == .enabled }
     }
 }

@@ -174,8 +174,8 @@ versions of those tools, so check that a path exists if a command cannot find it
 
 ## Restore and uninstall
 
-**Restore System Defaults** is in the toolbar of Overview and Fans, and at the bottom of each menu bar popover. To remove
-everything:
+**Restore System Defaults** is in the toolbar of every page of the window, and at the bottom of each menu bar popover. To
+remove everything:
 
 1. In Settings, under Privileged Helper, choose **Restore Defaults and Prepare Uninstall**.
 2. Run the command it shows:

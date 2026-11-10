@@ -70,10 +70,6 @@ struct FansPage: View {
             }
             .disabled(blockReason != nil)
         }
-        .navigationSubtitle(headerDetail)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) { RestoreButton(control: control) }
-        }
         .sampling([.fans, .temperatureSummary], engine: store.engine)
         .task { await control.refresh() }
     }
