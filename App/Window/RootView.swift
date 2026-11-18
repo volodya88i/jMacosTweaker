@@ -1,3 +1,4 @@
+import Core
 import SwiftUI
 
 /// The main window: a native sidebar and one page. On macOS 26 and later the sidebar and toolbar are Liquid Glass by
@@ -54,6 +55,11 @@ private struct Sidebar: View {
             Section(String(localized: "App")) { rows(WindowSection.app) }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom) {
+            if let release = context.updates.noticeRelease {
+                UpdateNotice(release: release, updates: context.updates)
+            }
+        }
     }
 
     private func rows(_ sections: [WindowSection]) -> some View {
@@ -65,6 +71,30 @@ private struct Sidebar: View {
             }
             .tag(section)
         }
+    }
+}
+
+/// A newer release, at the foot of the sidebar. Opens the release page; never downloads anything.
+private struct UpdateNotice: View {
+    let release: LatestRelease
+    let updates: UpdateChecker
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(String(localized: "Version \(release.version.description) is available"), systemImage: "arrow.down.circle")
+                .font(.callout.weight(.medium))
+            HStack(spacing: 8) {
+                Link(String(localized: "Release Notes"), destination: release.pageURL)
+                Spacer()
+                Button(String(localized: "Later")) { updates.dismiss() }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+        }
+        .padding(10)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(10)
     }
 }
 

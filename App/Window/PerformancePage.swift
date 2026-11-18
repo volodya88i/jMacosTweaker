@@ -30,8 +30,9 @@ struct PerformancePage: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .sampling([.cpu, .memory, .gpu, .frequency, .network, .disk], engine: store.engine)
-        .sampling([.processes], every: 3, engine: store.engine)
+        // Every 2 s, like the menu bar: once a second doubled the window's CPU time for little visible gain.
+        .sampling([.cpu, .memory, .gpu, .frequency, .network, .disk], every: 2, engine: store.engine)
+        .sampling([.processes], every: 4, engine: store.engine)
     }
 }
 
@@ -67,7 +68,7 @@ struct CPUDetail: View {
             DetailHeader(symbol: "cpu", title: String(localized: "CPU"), value: wholePercent(current?.usage), compact: compact)
             Sparkline(history: model.history, height: compact ? 30 : 40)
             if let current {
-                CoreBars(cores: current.cores).frame(height: compact ? 26 : 34)
+                CoreBars(cores: current.cores, compact: compact)
                 InfoRows(items: rows(current))
             }
         }
@@ -92,27 +93,100 @@ struct CPUDetail: View {
     }
 }
 
-/// One rounded bar per core. Efficiency cores use a lighter tint, as a legend under the bars says.
+/// Per-core load, P-cores and E-cores as two labeled groups. Each group's width follows its core count, so every bar has
+/// the same width. Hover a bar for its core and load.
 private struct CoreBars: View {
     let cores: [CPUCoreLoad]
+    var compact = false
+
+    struct Group: Identifiable {
+        let id: String
+        let title: String
+        let prefix: String
+        let cores: [CPUCoreLoad]
+        let faded: Bool
+    }
+
+    static func groups(_ cores: [CPUCoreLoad]) -> [Group] {
+        let performance = cores.filter { $0.kind == .performance }
+        let efficiency = cores.filter { $0.kind == .efficiency }
+        let other = cores.filter { $0.kind == .unknown }
+        var result: [Group] = []
+        if !performance.isEmpty {
+            result.append(Group(id: "P", title: String(localized: "P-cores"), prefix: "P", cores: performance, faded: false))
+        }
+        if !efficiency.isEmpty {
+            result.append(Group(id: "E", title: String(localized: "E-cores"), prefix: "E", cores: efficiency, faded: true))
+        }
+        if !other.isEmpty {
+            result.append(Group(id: "C", title: String(localized: "Cores"), prefix: "", cores: other, faded: false))
+        }
+        return result
+    }
+
+    var body: some View {
+        let groups = Self.groups(cores)
+        let total = max(groups.reduce(0) { $0 + $1.cores.count }, 1)
+        let gap: CGFloat = 12
+        GeometryReader { geometry in
+            let available = max(geometry.size.width - gap * CGFloat(max(groups.count - 1, 0)), 1)
+            HStack(alignment: .top, spacing: gap) {
+                ForEach(groups) { group in
+                    CoreGroupView(group: group, compact: compact)
+                        .frame(width: available * CGFloat(group.cores.count) / CGFloat(total))
+                }
+            }
+        }
+        .frame(height: compact ? 42 : 58)
+    }
+}
+
+private struct CoreGroupView: View {
+    let group: CoreBars.Group
+    let compact: Bool
     @Environment(\.dataTint) private var tint
 
     var body: some View {
-        Canvas { context, size in
-            guard !cores.isEmpty else { return }
-            let gap: CGFloat = 3
-            let width = (size.width - gap * CGFloat(cores.count - 1)) / CGFloat(cores.count)
-            for (index, core) in cores.enumerated() {
-                let x = CGFloat(index) * (width + gap)
-                let track = Path(roundedRect: CGRect(x: x, y: 0, width: width, height: size.height), cornerRadius: min(width / 2, 3))
-                context.fill(track, with: .color(.secondary.opacity(0.18)))
-                let height = max(size.height * CGFloat(min(max(core.usage, 0), 1)), 2)
-                let fill = Path(roundedRect: CGRect(x: x, y: size.height - height, width: width, height: height), cornerRadius: min(width / 2, 3))
-                context.fill(fill, with: .color(core.kind == .efficiency ? tint.opacity(0.5) : tint))
+        let average = group.cores.reduce(0) { $0 + $1.usage } / Double(max(group.cores.count, 1))
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 3) {
+                ForEach(Array(group.cores.enumerated()), id: \.offset) { index, core in
+                    let usage = min(max(core.usage, 0), 1)
+                    RoundedRectangle(cornerRadius: 2.5)
+                        .fill(.secondary.opacity(0.18))
+                        .overlay(alignment: .bottom) {
+                            // Scaled rather than sized, so a new value redraws the bar without a layout pass.
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(group.faded ? tint.opacity(0.55) : tint)
+                                .scaleEffect(x: 1, y: max(usage, 0.04), anchor: .bottom)
+                        }
+                        .help("\(group.prefix)\(index + 1) · \(Format.percent(usage))")
+                }
             }
+            .frame(maxHeight: .infinity)
+            if !compact {
+                HStack(spacing: 3) {
+                    ForEach(group.cores.indices, id: \.self) { index in
+                        Text("\(index + 1)")
+                            .font(.system(size: 8, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .accessibilityHidden(true)
+            }
+            HStack(spacing: 4) {
+                Text(group.title).fontWeight(.medium)
+                Text("\(group.cores.count)").foregroundStyle(.tertiary)
+                Spacer(minLength: 2)
+                Text(Format.percent(average)).monospacedDigit()
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
-        .accessibilityElement()
-        .accessibilityLabel(String(localized: "Per-core load, \(cores.count) cores"))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "\(group.title), \(group.cores.count) cores, average \(Format.percent(average))"))
     }
 }
 

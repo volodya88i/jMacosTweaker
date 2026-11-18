@@ -49,6 +49,7 @@ public struct SamplePlan: Sendable {
                 fresh[source] = min(fresh[source] ?? .infinity, demand.interval * max(multiplier, 1))
             }
         }
+        fresh = Self.aligned(fresh)
         for source in nextDue.keys where fresh[source] == nil {
             nextDue[source] = nil
         }
@@ -60,6 +61,18 @@ public struct SamplePlan: Sendable {
             }
         }
         intervals = fresh
+    }
+
+    /// Snaps slower rates to a multiple of the fastest one when that is within a quarter of what was asked. With the menu
+    /// bar at 2 s for CPU and 5 s for temperatures, reads used to land at 0, 2, 4, 5, 6, 8 and 10 s: seven wakeups and
+    /// redraws where five do, because 5 s becomes 6 s and lands on the 2 s ticks.
+    static func aligned(_ intervals: [SampleSource: TimeInterval]) -> [SampleSource: TimeInterval] {
+        guard let fastest = intervals.values.min(), fastest > 0 else { return intervals }
+        return intervals.mapValues { interval in
+            guard interval > fastest else { return interval }
+            let snapped = (interval / fastest).rounded(.toNearestOrAwayFromZero) * fastest
+            return abs(snapped - interval) <= interval * 0.25 ? snapped : interval
+        }
     }
 
     /// Time of the next needed wakeup, or nil when nothing is demanded and no timer should exist.

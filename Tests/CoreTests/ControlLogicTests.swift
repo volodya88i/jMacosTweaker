@@ -421,3 +421,62 @@ final class ProcessTests: XCTestCase {
     }
 }
 
+
+final class SpikeFilterAndFloorTests: XCTestCase {
+    func testFilterRisesOnlyAfterTheWindowAndFallsAtOnce() {
+        var filter = SpikeFilter(window: 10)
+        XCTAssertEqual(filter.add(60, now: 0), 60)
+        XCTAssertEqual(filter.add(100, now: 1), 60)
+        XCTAssertEqual(filter.add(100, now: 9), 60)
+        XCTAssertEqual(filter.add(100, now: 10), 100, "held for the whole window")
+        XCTAssertEqual(filter.add(70, now: 11), 70, "a fall is followed at once")
+    }
+
+    func testFloorIsMonotonicAndWeak() throws {
+        XCTAssertNoThrow(try CurveMath.validate(CurveMath.macOSFloor).get())
+        XCTAssertEqual(CurveMath.floorPercent(at: 80), 0)
+        XCTAssertEqual(CurveMath.floorPercent(at: 100), 40)
+        for preset in [FanPreset.silent, .balanced, .performance] {
+            let curve = try XCTUnwrap(preset.curve)
+            XCTAssertEqual(CurveMath.liftedToFloor(curve), curve, "built-in curves are already above the floor: \(preset)")
+        }
+    }
+
+    func testLiftingKeepsACurveValid() throws {
+        let off = FanCurve(points: [.init(temperature: 40, percent: 0), .init(temperature: 80, percent: 0), .init(temperature: 100, percent: 10)])
+        let lifted = CurveMath.liftedToFloor(off)
+        XCTAssertNoThrow(try CurveMath.validate(lifted).get())
+        XCTAssertEqual(lifted.points.last?.percent, 40)
+        XCTAssertEqual(lifted.points[1].percent, 0)
+    }
+}
+
+final class ReleaseCheckTests: XCTestCase {
+    func testVersionsCompareNumerically() throws {
+        let older = try XCTUnwrap(ReleaseVersion("0.2.9"))
+        let newer = try XCTUnwrap(ReleaseVersion("v0.2.10"))
+        XCTAssertLessThan(older, newer)
+        XCTAssertEqual(ReleaseVersion("1.0"), ReleaseVersion("1.0.0"))
+        XCTAssertEqual(newer.description, "0.2.10")
+    }
+
+    func testUntrustedTagsAreRefused() {
+        for tag in ["", "v", "0.2.2-beta", "0.2.2.1", "1..2", "12345.0", "0.2.2/../x", "٣.1", " 0.2 x"] {
+            XCTAssertNil(ReleaseVersion(tag), tag)
+        }
+    }
+
+    func testParsesTheLatestReleaseAndBuildsItsOwnLink() throws {
+        let json = #"{"tag_name":"v0.3.0","draft":false,"prerelease":false,"html_url":"https://evil.example/x"}"#
+        let release = try XCTUnwrap(ReleaseCheck.parse(Data(json.utf8)))
+        XCTAssertEqual(release.version, ReleaseVersion("0.3.0"))
+        XCTAssertEqual(release.pageURL.absoluteString, "https://github.com/volodya88i/jMacosTweaker/releases/tag/v0.3.0")
+    }
+
+    func testDraftsPrereleasesAndJunkAreIgnored() {
+        XCTAssertNil(ReleaseCheck.parse(Data(#"{"tag_name":"v9.0.0","prerelease":true}"#.utf8)))
+        XCTAssertNil(ReleaseCheck.parse(Data(#"{"tag_name":"v9.0.0","draft":true}"#.utf8)))
+        XCTAssertNil(ReleaseCheck.parse(Data(#"{"message":"Not Found"}"#.utf8)))
+        XCTAssertNil(ReleaseCheck.parse(Data(repeating: 32, count: ReleaseCheck.maximumResponseSize + 1)))
+    }
+}

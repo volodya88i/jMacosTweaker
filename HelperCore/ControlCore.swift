@@ -47,6 +47,8 @@ public final class ControlCore: @unchecked Sendable {
     private let journalStore: any KeyValueStore
     private let chargeStore: any KeyValueStore
     private let timing: Timing
+    /// Wall clock for charge pauses, which end at a time of day. Injected for tests.
+    private let wallClock: @Sendable () -> Date
 
     public private(set) var fanCapability: Capability
     public private(set) var chargeCapability: Capability
@@ -76,12 +78,17 @@ public final class ControlCore: @unchecked Sendable {
     private var lastUnlockAttempt: TimeInterval?
     private var lastSlew: [Int: TimeInterval] = [:]
     private var curveGoals: [Int: Double] = [:]
+    /// The control temperature with short spikes removed, for curves.
+    private var controlFilter = SpikeFilter(window: FanResponse.normal.spikeWindow)
+    /// The hottest CPU or GPU temperature with short spikes removed, for the macOS floor.
+    private var floorFilter = SpikeFilter(window: FanResponse.normal.spikeWindow)
     private var clockNow: TimeInterval = 0
     public private(set) var lastError: String?
 
     public init(
         inputs: any ControlInputs, port: any SMCPort, journalStore: any KeyValueStore, chargeStore: any KeyValueStore,
-        fanCapability: Capability, chargeCapability: Capability, timing: Timing = Timing()
+        fanCapability: Capability, chargeCapability: Capability, timing: Timing = Timing(),
+        wallClock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.inputs = inputs
         self.port = port
@@ -91,6 +98,7 @@ public final class ControlCore: @unchecked Sendable {
         self.fanCapability = fanCapability
         self.chargeCapability = chargeCapability
         self.timing = timing
+        self.wallClock = wallClock
         chargeRequest = chargeCapability.isAvailable ? (chargeStore.load(ChargeRequest.self) ?? .off) : .off
     }
 
@@ -103,7 +111,7 @@ public final class ControlCore: @unchecked Sendable {
     }
 
     public var needsTimer: Bool {
-        !asleep && (fanRequestIsActive || chargeRequest.enabled || !manualFans.isEmpty || appliedCharge != .allowCharging || !journal.isEmpty)
+        !asleep && (fanRequestIsActive || chargeRequest.enabled || chargeRequest.pause != nil || !manualFans.isEmpty || appliedCharge != .allowCharging || !journal.isEmpty)
     }
 
     private var fanRequestIsActive: Bool {
@@ -144,15 +152,14 @@ public final class ControlCore: @unchecked Sendable {
             returnToSystem(fan: fan)
         }
         if !fanRequestIsActive { releaseAllFans() }
-        ramps = [:]
-        curveGoals = [:]
+        resetCurveState()
         tick(now: now)
         return .success(())
     }
 
     public func applyCharge(_ request: ChargeRequest, now: TimeInterval) -> Result<Void, RequestError> {
         guard chargeCapability.isAvailable else { return .failure(.unavailable) }
-        let clamped = ChargeStateMachine.clamped(request)
+        let clamped = ChargeStateMachine.validated(request, now: wallClock())
         // A repeat of a request that already failed must not retry: that was a write loop on real hardware.
         if chargeFaulted, clamped == chargeRequest { return .failure(.unavailable) }
         chargeRequest = clamped
@@ -171,26 +178,24 @@ public final class ControlCore: @unchecked Sendable {
         fanFaulted = false
         chargeFaulted = false
         lastError = nil
-        ramps = [:]
-        curveGoals = [:]
+        resetCurveState()
         restoreFromJournal()
     }
 
     /// On SIGTERM: hands everything back but keeps the charge policy, so it applies again at next start.
     public func prepareForExit() {
         fanRequest = nil
-        ramps = [:]
-        curveGoals = [:]
+        resetCurveState()
         restoreFromJournal()
     }
 
     public func willSleep() {
         asleep = true
-        // Fans have no live controller during sleep, and discharge must not continue unattended.
+        // Fans have no live controller during sleep, and the battery must not drain unattended: `CHIE` sets the adapter
+        // aside, so charging is allowed again. A pause still running picks up again at the first tick after wake.
         releaseAllFans()
-        ramps = [:]
-        curveGoals = [:]
-        if appliedCharge == .dischargeOnAdapter { applyChargeAction(.inhibitCharging) }
+        resetCurveState()
+        if appliedCharge == .dischargeOnAdapter { applyChargeAction(.allowCharging) }
     }
 
     public func didWake(now: TimeInterval) {
@@ -221,6 +226,20 @@ public final class ControlCore: @unchecked Sendable {
         )
     }
 
+    private func resetCurveState() {
+        ramps = [:]
+        curveGoals = [:]
+        let window = (fanRequest?.response ?? .normal).spikeWindow
+        controlFilter = SpikeFilter(window: window)
+        floorFilter = SpikeFilter(window: window)
+    }
+
+    private static func rampTuning(_ response: FanResponse) -> FanRamp.Tuning {
+        var tuning = FanRamp.Tuning()
+        tuning.rampUpPerSecond = response.rampUpPerSecond
+        return tuning
+    }
+
     // MARK: Loop
 
     /// One evaluation. At most about 1 Hz, and only while `needsTimer` is true.
@@ -241,7 +260,7 @@ public final class ControlCore: @unchecked Sendable {
             if !journal.isEmpty { releaseAllFans() }
             return
         }
-        let overriding = supervisor.update(summary: summary)
+        supervisor.update(summary: summary, now: now)
         if summary.cpuHottest != nil || summary.gpu != nil { lastSupervisedAt = now }
 
         if let reason = staleControllerReason(now: now) {
@@ -268,21 +287,20 @@ public final class ControlCore: @unchecked Sendable {
             return
         }
 
-        if overriding {
-            // Maximum for every fan we control. If that fails, the failure path hands back to the system.
-            for fan in inputs.fanLimits.keys.sorted() where request.policies[fan].map({ $0 != .system }) == true {
-                if let limits = inputs.fanLimits[fan] { command(fan: fan, rpm: limits.maximum, immediate: true) }
-            }
-            return
-        }
+        // The macOS floor follows the hottest CPU or GPU, whatever the curve follows, so no request is weaker than macOS.
+        let hottest = [summary.cpuHottest, summary.gpu].compactMap { $0 }.max()
+        let floor = hottest.map { CurveMath.floorPercent(at: floorFilter.add($0, now: now)) } ?? 0
+        // While the supervisor is engaged, each fan gets its boost on top, written at once. Invariant 4.
+        let boosting = supervisor.isOverriding
 
         let needsSensor = request.policies.values.contains { if case .curve = $0 { return true } else { return false } }
         var control: Double?
         if needsSensor {
             control = Self.controlValue(request.sensor, readings: readings, summary: summary)
-            if let control {
+            if let raw = control {
                 lastGoodSensor = now
-                lastGoodValue = control
+                lastGoodValue = raw
+                control = controlFilter.add(raw, now: now)
             } else if now - (lastGoodSensor ?? now) > timing.sensorStaleAfter {
                 releaseAllFans()
                 fanRequest = nil
@@ -296,8 +314,8 @@ public final class ControlCore: @unchecked Sendable {
         for fan in inputs.fanLimits.keys.sorted() {
             guard let policy = request.policies[fan], policy != .system, let limits = inputs.fanLimits[fan] else { continue }
             // A curve with no temperature yet has nothing to command, and manual mode without a target would leave the
-            // fan wherever unlocking put it.
-            if case .curve = policy, control == nil { continue }
+            // fan wherever unlocking put it. While boosting, the boost alone is a target.
+            if case .curve = policy, control == nil, !boosting { continue }
             // Every tick until accepted, whatever the policy. A curve only produces output when its target changes,
             // which is too rare to get through the seconds of refusals after unlocking.
             if !manualFans.contains(fan), !enterManual(fan: fan) {
@@ -310,17 +328,26 @@ public final class ControlCore: @unchecked Sendable {
             case .maximum:
                 command(fan: fan, rpm: limits.maximum, immediate: true)
             case let .constant(percent):
-                command(fan: fan, rpm: CurveMath.rpm(percent: percent, minimum: limits.minimum, maximum: limits.maximum))
+                let wanted = supervisor.boosted(max(percent, floor))
+                command(fan: fan, rpm: CurveMath.rpm(percent: wanted, minimum: limits.minimum, maximum: limits.maximum), immediate: boosting)
             case let .curve(curve):
-                guard let control else { continue }
-                var ramp = ramps[fan] ?? FanRamp()
-                let next = ramp.step(temperature: control, now: now) { temperature in
-                    CurveMath.rpm(percent: CurveMath.percent(at: temperature, curve: curve), minimum: limits.minimum, maximum: limits.maximum)
+                if let control {
+                    var ramp = ramps[fan] ?? FanRamp(tuning: Self.rampTuning(request.response ?? .normal))
+                    let next = ramp.step(temperature: control, now: now) { temperature in
+                        let percent = max(CurveMath.percent(at: temperature, curve: curve), floor)
+                        return CurveMath.rpm(percent: percent, minimum: limits.minimum, maximum: limits.maximum)
+                    }
+                    ramps[fan] = ramp
+                    if let next { curveGoals[fan] = next }
                 }
-                ramps[fan] = ramp
-                if let next { curveGoals[fan] = next }
                 // Sent every tick, because slewing takes several ticks to reach a goal the ramp reports only once.
-                if let goal = curveGoals[fan] { command(fan: fan, rpm: goal) }
+                let goal = curveGoals[fan] ?? limits.minimum
+                if boosting {
+                    let percent = supervisor.boosted(CurveMath.percent(rpm: goal, minimum: limits.minimum, maximum: limits.maximum))
+                    command(fan: fan, rpm: CurveMath.rpm(percent: percent, minimum: limits.minimum, maximum: limits.maximum), immediate: true)
+                } else if curveGoals[fan] != nil {
+                    command(fan: fan, rpm: goal)
+                }
             }
             if fanFaulted { return }
         }
@@ -554,9 +581,13 @@ public final class ControlCore: @unchecked Sendable {
             applyChargeAction(.allowCharging)
             return
         }
-        let wanted = chargeMachine.update(request: chargeRequest, inputs: battery)
+        let wanted = chargeMachine.update(request: chargeRequest, inputs: battery, now: wallClock())
         if chargeMachine.topUpFinished {
             chargeRequest.topUp = false
+            _ = chargeStore.save(chargeRequest)
+        }
+        if chargeMachine.pauseFinished {
+            chargeRequest.pause = nil
             _ = chargeStore.save(chargeRequest)
         }
         applyChargeAction(wanted)

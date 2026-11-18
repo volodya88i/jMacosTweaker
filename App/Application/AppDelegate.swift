@@ -5,10 +5,24 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let settings = AppSettings()
+    private let settings = AppSettings(defaults: AppDelegate.settingsDefaults)
+
+    /// Debug builds take `--settings-suite <name>` to run against a separate preferences domain, so measurements and
+    /// tests never read or write the owner's settings.
+    private static var settingsDefaults: UserDefaults {
+        #if DEBUG
+        let arguments = CommandLine.arguments
+        if let flag = arguments.firstIndex(of: "--settings-suite"), arguments.indices.contains(flag + 1),
+           let suite = UserDefaults(suiteName: arguments[flag + 1]) {
+            return suite
+        }
+        #endif
+        return .standard
+    }
     private lazy var store = MonitorStore(readers: HardwareFactory.makeReaders())
     private lazy var control = ControlModel(settings: settings, store: store)
-    private lazy var context = AppContext(settings: settings, store: store, control: control)
+    private lazy var updates = UpdateChecker(settings: settings, defaults: AppDelegate.settingsDefaults)
+    private lazy var context = AppContext(settings: settings, store: store, control: control, updates: updates)
     private lazy var alerts = AlertManager(settings: settings, store: store)
     private let panels = PanelController()
     private var menuBar: MenuBarController?
@@ -38,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.settingsChanged()
         alerts.chargeLimit = { [weak self] in self?.control.nativeChargeLimit }
         alerts.settingsChanged()
+        updates.settingsChanged()
         control.start()
         trackSettings()
         installSystemObservers()
@@ -101,6 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.menuBar?.settingsChanged()
                 self.alerts.settingsChanged()
                 self.control.settingsChanged()
+                self.updates.settingsChanged()
                 self.trackSettings()
             }
         }

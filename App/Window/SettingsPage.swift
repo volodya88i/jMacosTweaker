@@ -55,6 +55,7 @@ struct SettingsPage: View {
             } footer: {
                 Text("At most one notification of each kind every 15 minutes.").foregroundStyle(.secondary)
             }
+            UpdatesSection(settings: settings, updates: context.updates)
             HelperSection(control: context.control)
             Section(String(localized: "Data")) {
                 LabeledContent(String(localized: "Settings file")) {
@@ -184,5 +185,54 @@ private struct LaunchAtLoginToggle: View {
             }
         }
         .task { enabled = SMAppService.mainApp.status == .enabled }
+    }
+}
+
+/// Opt-in, because until it is on the app makes no network request at all.
+private struct UpdatesSection: View {
+    @Bindable var settings: AppSettings
+    let updates: UpdateChecker
+
+    var body: some View {
+        Section {
+            Toggle(String(localized: "Check for updates once a day"), isOn: $settings.stored.checkForUpdates)
+            if settings.stored.checkForUpdates {
+                LabeledContent {
+                    Button(String(localized: "Check Now")) { updates.checkNow() }
+                        .disabled(updates.state == .checking)
+                } label: {
+                    status
+                }
+            }
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("Reads the latest version number from the project's GitHub page. Nothing about this Mac is sent, and nothing is downloaded or installed. With this off, the app makes no network requests.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var status: some View {
+        switch updates.state {
+        case .off, .idle:
+            Text("Not checked yet")
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking…")
+            }
+        case let .upToDate(date):
+            VStack(alignment: .leading, spacing: 2) {
+                Text("jMacosTweaker is up to date")
+                Text("Checked \(date.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
+            }
+        case let .available(release):
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Version \(release.version.description) is available")
+                Link(String(localized: "Open the release page"), destination: release.pageURL).font(.caption)
+            }
+        case .failed:
+            Text("Could not reach GitHub").foregroundStyle(.secondary)
+        }
     }
 }

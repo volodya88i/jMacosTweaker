@@ -38,14 +38,55 @@ public enum FanPolicy: Codable, Hashable, Sendable {
     case maximum
 }
 
+/// How long a temperature must hold before a curve follows it up. Short spikes, such as a burst of work on one core,
+/// are skipped. Falling temperatures are followed at once, through the ramp's own calm-down.
+public enum FanResponse: String, Codable, CaseIterable, Hashable, Sendable {
+    case fast, normal, calm
+
+    /// Seconds a rise must last before fans follow it.
+    public var spikeWindow: Double {
+        switch self {
+        case .fast: 3
+        case .normal: 10
+        case .calm: 30
+        }
+    }
+
+    /// Fastest speed-up, in RPM per second.
+    public var rampUpPerSecond: Double {
+        switch self {
+        case .fast: 600
+        case .normal: 250
+        case .calm: 100
+        }
+    }
+}
+
 /// What the app asks for. Per fan, or the same for all when linked.
 public struct FanRequest: Codable, Hashable, Sendable {
     public var policies: [Int: FanPolicy]
     public var sensor: ControlSensor
+    /// Optional, so requests from earlier versions still decode. Missing means `.normal`.
+    public var response: FanResponse?
 
-    public init(policies: [Int: FanPolicy], sensor: ControlSensor) {
+    public init(policies: [Int: FanPolicy], sensor: ControlSensor, response: FanResponse? = nil) {
         self.policies = policies
         self.sensor = sensor
+        self.response = response
+    }
+}
+
+/// A manual pause of charging. It ends at the time or at the level, whichever comes first, and always at the safe floor.
+/// While it runs the Mac uses its battery even on the adapter, because that is what the only verified key does.
+public struct ChargePause: Codable, Hashable, Sendable {
+    /// Wall-clock end, so a pause survives a helper restart.
+    public var until: Date?
+    /// Ends when the battery is at or below this level.
+    public var untilPercent: Int?
+
+    public init(until: Date?, untilPercent: Int?) {
+        self.until = until
+        self.untilPercent = untilPercent
     }
 }
 
@@ -58,8 +99,13 @@ public struct ChargeRequest: Codable, Hashable, Sendable {
     public var heatLimit: Double
     public var dischargeToLimit: Bool
     public var topUp: Bool
+    /// Overrides the limit while set. Optional, so requests from earlier versions still decode.
+    public var pause: ChargePause?
 
-    public init(enabled: Bool, limit: Int, sailing: Int, heatProtection: Bool, heatLimit: Double, dischargeToLimit: Bool, topUp: Bool) {
+    public init(
+        enabled: Bool, limit: Int, sailing: Int, heatProtection: Bool, heatLimit: Double, dischargeToLimit: Bool, topUp: Bool,
+        pause: ChargePause? = nil
+    ) {
         self.enabled = enabled
         self.limit = limit
         self.sailing = sailing
@@ -67,6 +113,7 @@ public struct ChargeRequest: Codable, Hashable, Sendable {
         self.heatLimit = heatLimit
         self.dischargeToLimit = dischargeToLimit
         self.topUp = topUp
+        self.pause = pause
     }
 
     public static let off = ChargeRequest(enabled: false, limit: 80, sailing: 5, heatProtection: true, heatLimit: 40, dischargeToLimit: false, topUp: false)

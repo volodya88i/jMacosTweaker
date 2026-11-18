@@ -44,7 +44,7 @@ struct DashboardPage: View {
                 }
             }
         }
-        .sampling(sources, engine: store.engine)
+        .sampling(sources, every: 2, engine: store.engine)
     }
 }
 

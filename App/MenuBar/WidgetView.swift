@@ -22,8 +22,31 @@ final class WidgetView: NSView {
     var entries: [Entry] = [] {
         didSet {
             guard entries != oldValue else { return }
+            widths = entries.map(width)
             needsDisplay = true
         }
+    }
+
+    /// Per entry, worked out once per change and reused by drawing.
+    private var widths: [CGFloat] = []
+
+    private static let rightAligned: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .right
+        return style
+    }()
+
+    /// Text widths by font and string. Values repeat all the time ("42%", "61°"), and measuring was the largest cost of
+    /// an idle app with the window closed.
+    private static var measured: [String: CGFloat] = [:]
+
+    private static func textWidth(_ string: String, _ font: NSFont, tag: Character) -> CGFloat {
+        let key = "\(tag)\(string)"
+        if let width = measured[key] { return width }
+        if measured.count > 2000 { measured.removeAll(keepingCapacity: true) }
+        let width = ceil((string as NSString).size(withAttributes: [.font: font]).width)
+        measured[key] = width
+        return width
     }
 
     var accent: NSColor = .labelColor {
@@ -39,7 +62,6 @@ final class WidgetView: NSView {
 
     func requiredWidth() -> CGFloat {
         guard !entries.isEmpty else { return 22 }
-        let widths = entries.map(width)
         return widths.reduce(0, +) + Self.gap * CGFloat(entries.count - 1) + Self.margin * 2
     }
 
@@ -47,17 +69,19 @@ final class WidgetView: NSView {
     /// changes size when the number of digits does. Load modules swing between one and two digits all the time, so they
     /// always reserve two and do not push their neighbors around.
     private func valueSlot(_ entry: Entry) -> CGFloat {
-        let font = entry.style == .iconValue || !entry.showsLabel ? Self.singleLineFont : Self.valueFont
-        var value = ceil((entry.content.value as NSString).size(withAttributes: [.font: font]).width)
+        let single = entry.style == .iconValue || !entry.showsLabel
+        let font = single ? Self.singleLineFont : Self.valueFont
+        let tag: Character = single ? "s" : "v"
+        var value = Self.textWidth(entry.content.value, font, tag: tag)
         if [Module.cpu, .memory, .gpu].contains(entry.content.module) {
-            value = max(value, ceil(("88%" as NSString).size(withAttributes: [.font: font]).width))
+            value = max(value, Self.textWidth("88%", font, tag: tag))
         }
         // Rates change length constantly, so these keep one steady width.
         if [Module.network, .disk].contains(entry.content.module) {
-            value = max(value, ceil(("888K" as NSString).size(withAttributes: [.font: font]).width))
+            value = max(value, Self.textWidth("888K", font, tag: tag))
         }
-        guard entry.style != .iconValue, entry.showsLabel else { return value }
-        let label = ceil(((entry.content.label ?? entry.content.module.shortLabel) as NSString).size(withAttributes: [.font: Self.labelFont]).width)
+        guard !single else { return value }
+        let label = Self.textWidth(entry.content.label ?? entry.content.module.shortLabel, Self.labelFont, tag: "l")
         return max(value, label)
     }
 
@@ -74,8 +98,8 @@ final class WidgetView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         var x = Self.margin
-        for entry in entries {
-            let entryWidth = width(entry)
+        for (index, entry) in entries.enumerated() {
+            let entryWidth = index < widths.count ? widths[index] : width(entry)
             draw(entry, in: NSRect(x: x, y: 0, width: entryWidth, height: bounds.height))
             x += entryWidth + Self.gap
         }
@@ -119,24 +143,20 @@ final class WidgetView: NSView {
     }
 
     private func drawStacked(label: String, value: String, in rect: NSRect, color: NSColor) {
-        let right = NSMutableParagraphStyle()
-        right.alignment = .right
         (label as NSString).draw(
             in: NSRect(x: rect.minX, y: rect.midY + 1, width: rect.width, height: 10),
-            withAttributes: [.font: Self.labelFont, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: right]
+            withAttributes: [.font: Self.labelFont, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: Self.rightAligned]
         )
         (value as NSString).draw(
             in: NSRect(x: rect.minX, y: rect.midY - 12, width: rect.width, height: 15),
-            withAttributes: [.font: Self.valueFont, .foregroundColor: color, .paragraphStyle: right]
+            withAttributes: [.font: Self.valueFont, .foregroundColor: color, .paragraphStyle: Self.rightAligned]
         )
     }
 
     private func drawSingleLine(_ value: String, in rect: NSRect, color: NSColor) {
-        let right = NSMutableParagraphStyle()
-        right.alignment = .right
         (value as NSString).draw(
             in: NSRect(x: rect.minX, y: rect.midY - 8.5, width: rect.width, height: 17),
-            withAttributes: [.font: Self.singleLineFont, .foregroundColor: color, .paragraphStyle: right]
+            withAttributes: [.font: Self.singleLineFont, .foregroundColor: color, .paragraphStyle: Self.rightAligned]
         )
     }
 

@@ -14,6 +14,7 @@ struct BatteryPage: View {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(spacing: 14) {
                         ChargeLimitSection(context: context, battery: battery)
+                        ChargePauseCard(context: context)
                         Card {
                             CardHeader(symbol: "bolt", title: String(localized: "Power")) {
                                 if let watts = model.flow?.systemWatts { Text("System \(Format.watts(watts))") }
@@ -43,7 +44,7 @@ struct BatteryPage: View {
                     .frame(maxWidth: .infinity, minHeight: 300)
             }
         }
-        .sampling([.battery, .power], engine: context.engine)
+        .sampling([.battery, .power], every: 2, engine: context.engine)
         .task { await context.control.refresh() }
     }
 

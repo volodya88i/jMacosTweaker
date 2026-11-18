@@ -14,6 +14,30 @@ struct FanSettings: Codable, Hashable, Sendable {
     var presetOnAdapter = FanPreset.system
     var presetOnBattery = FanPreset.system
     var saved: [NamedPreset] = []
+    /// How quickly curves follow a rise. Normal skips spikes shorter than 10 s.
+    var response = FanResponse.normal
+
+    init() {}
+
+    /// Missing fields keep their defaults, so settings from an older version keep everything they had.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func value<Value: Decodable>(_ key: CodingKeys, _ fallback: Value) -> Value {
+            (try? container.decodeIfPresent(Value.self, forKey: key)) ?? fallback
+        }
+        let base = FanSettings()
+        preset = value(.preset, base.preset)
+        constantPercent = value(.constantPercent, base.constantPercent)
+        customCurve = value(.customCurve, base.customCurve)
+        sensor = value(.sensor, base.sensor)
+        linked = value(.linked, base.linked)
+        perFan = value(.perFan, base.perFan)
+        switchByPowerSource = value(.switchByPowerSource, base.switchByPowerSource)
+        presetOnAdapter = value(.presetOnAdapter, base.presetOnAdapter)
+        presetOnBattery = value(.presetOnBattery, base.presetOnBattery)
+        saved = value(.saved, base.saved)
+        response = value(.response, base.response)
+    }
 }
 
 enum AccentChoice: Codable, Hashable, Sendable, CaseIterable {
@@ -213,6 +237,12 @@ final class AppSettings {
         var hasCompletedOnboarding = false
         var fan = FanSettings()
         var charge = ChargeRequest.off
+        /// Off by default: until it is on, the app makes no network request.
+        var checkForUpdates = false
+        /// One-time changes already applied to this file. 1: notifications off by default (0.2.2).
+        var migrations = Stored.currentMigrations
+
+        static let currentMigrations = 1
 
         init() {}
 
@@ -235,6 +265,9 @@ final class AppSettings {
             hasCompletedOnboarding = value(.hasCompletedOnboarding, base.hasCompletedOnboarding)
             fan = value(.fan, base.fan)
             charge = value(.charge, base.charge)
+            checkForUpdates = value(.checkForUpdates, base.checkForUpdates)
+            // A file without the field predates every migration.
+            migrations = value(.migrations, 0)
         }
     }
 
@@ -249,6 +282,8 @@ final class AppSettings {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.key), let decoded = try? JSONDecoder().decode(Stored.self, from: data) {
             stored = Self.normalized(decoded)
+            // didSet does not run in init, so a migration is written here.
+            if decoded.migrations < Stored.currentMigrations { save() }
         } else {
             stored = Stored()
         }
@@ -291,6 +326,36 @@ final class AppSettings {
         }
         result.fan.perFan = result.fan.perFan.filter { (0..<10).contains($0.key) }
         result.charge = ChargeStateMachine.clamped(result.charge)
+        // Notifications are opt-in. Versions before 0.2.2 could leave them on, so they are turned off once; the owner can
+        // turn them back on in Settings.
+        if result.migrations < 1 {
+            result.notifyHighTemperature = false
+            result.notifyChargeLimit = false
+        }
+        result.migrations = max(result.migrations, Stored.currentMigrations)
+        // Curves are never weaker than macOS. The helper enforces this too; lifting here keeps the editor honest.
+        result.fan = retiringBuiltInPresets(result.fan)
+        result.fan.customCurve = CurveMath.liftedToFloor(result.fan.customCurve)
+        for index in result.fan.saved.indices {
+            result.fan.saved[index].curve = CurveMath.liftedToFloor(result.fan.saved[index].curve)
+        }
+        return result
+    }
+
+    /// Silent, Balanced and Performance are no longer offered. One that is selected becomes the Custom curve and a saved
+    /// curve of the same name, so nothing changes for the owner; elsewhere, such as per fan, they become Custom.
+    static func retiringBuiltInPresets(_ fan: FanSettings) -> FanSettings {
+        var result = fan
+        if let curve = fan.preset.curve {
+            result.customCurve = curve
+            if !result.saved.contains(where: { $0.name == fan.preset.title }) {
+                result.saved.append(NamedPreset(name: fan.preset.title, curve: curve, sensor: fan.sensor))
+            }
+            result.preset = .custom
+        }
+        result.perFan = fan.perFan.mapValues { $0.isRetired ? .custom : $0 }
+        if fan.presetOnAdapter.isRetired { result.presetOnAdapter = .custom }
+        if fan.presetOnBattery.isRetired { result.presetOnBattery = .custom }
         return result
     }
 

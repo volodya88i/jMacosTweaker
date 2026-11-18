@@ -38,10 +38,64 @@ public enum CurveMath {
         return last.percent
     }
 
+    /// The weakest curve allowed, as percent of the fan's range against the hottest CPU or GPU temperature. Modeled on
+    /// macOS itself, which keeps fans near their minimum until the high 80s and below half speed at 100 °C (owner report,
+    /// 2026-11-18). No request can go below it: the editor keeps points above it, and the helper takes the higher of the
+    /// two whatever sensor the curve follows. UNVERIFIED against a measured firmware curve; see SAFETY.md.
+    public static let macOSFloor = FanCurve(points: [
+        .init(temperature: 85, percent: 0),
+        .init(temperature: 95, percent: 20),
+        .init(temperature: 100, percent: 40),
+        .init(temperature: 110, percent: 70)
+    ])
+
+    public static func floorPercent(at temperature: Double) -> Double {
+        percent(at: temperature, curve: macOSFloor)
+    }
+
+    /// Raises every point to the floor at its temperature, keeping the curve rising.
+    public static func liftedToFloor(_ curve: FanCurve) -> FanCurve {
+        var result = curve
+        var previous = 0.0
+        for index in result.points.indices {
+            let lifted = max(result.points[index].percent, floorPercent(at: result.points[index].temperature), previous)
+            result.points[index].percent = min(lifted, 100)
+            previous = result.points[index].percent
+        }
+        return result
+    }
+
     /// Maps a percent to RPM within the fan's reported limits, so a result outside them cannot be produced.
     public static func rpm(percent: Double, minimum: Double, maximum: Double) -> Double {
         let clamped = min(max(percent, 0), 100)
         return min(max(minimum + (maximum - minimum) * clamped / 100, minimum), maximum)
+    }
+
+    /// The inverse of `rpm(percent:minimum:maximum:)`.
+    public static func percent(rpm: Double, minimum: Double, maximum: Double) -> Double {
+        guard maximum > minimum else { return 100 }
+        return min(max((rpm - minimum) / (maximum - minimum) * 100, 0), 100)
+    }
+}
+
+/// Skips short spikes: the result is the lowest value seen over the window, so it rises only once a temperature has
+/// held for the whole window, and falls as soon as the newest sample does.
+public struct SpikeFilter: Sendable {
+    public var window: TimeInterval
+    private var samples: [(time: TimeInterval, value: Double)] = []
+
+    public init(window: TimeInterval) {
+        self.window = window
+    }
+
+    public mutating func add(_ value: Double, now: TimeInterval) -> Double {
+        samples.removeAll { $0.time <= now - window || $0.time > now }
+        samples.append((now, value))
+        return samples.map(\.value).min() ?? value
+    }
+
+    public mutating func reset() {
+        samples = []
     }
 }
 
@@ -122,7 +176,13 @@ public struct FanRamp: Sendable {
 public enum FanPreset: String, Codable, CaseIterable, Sendable {
     case system, silent, balanced, performance, maximum, constant, custom
 
-    /// Built-in curves are conservative: all reach full speed by 90 °C, below the supervisor's 95 °C.
+    /// The modes the app offers. Silent, Balanced and Performance were retired in 0.2.2 in favor of the owner's own
+    /// saved curves; they stay as cases so older settings still load, and are turned into saved curves on load.
+    public static let offered: [FanPreset] = [.system, .constant, .custom, .maximum]
+
+    public var isRetired: Bool { curve != nil }
+
+    /// The retired built-in curves. Kept to migrate settings that still select them.
     public var curve: FanCurve? {
         switch self {
         case .silent:

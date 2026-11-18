@@ -13,10 +13,16 @@ public enum CapabilityProbe {
     }
 
     /// Mac16,8 fans, on macOS 27.2: Constant and curves on both fans, gradual speed changes, and hand-back when the app
-    /// quits or is replaced, all observed through recorded keys. Charge control has not been tested on any Mac.
+    /// quits or is replaced, all observed through recorded keys.
+    ///
+    /// Mac16,8 charge, on macOS 27.2: `CHIE` = 1 sets the adapter aside within about 3 s, so the Mac runs from its
+    /// battery, and 0 brings the adapter back within seconds (approved clean run, 2026-11-01; see SAFETY.md).
+    /// That is a pause that drains the battery, not a hold, so the app offers it only as Pause Charging and keeps the
+    /// limit with the macOS setting.
     public static let verified: Verified = {
         var list = Verified()
         list.fanControl = [("Mac16,8", 27)]
+        list.chargeControl = [("Mac16,8", 27)]
         return list
     }()
 

@@ -65,6 +65,10 @@ final class ControlModel {
 
     /// Why fan control is read-only right now, or nil if it is usable.
     var fanBlockReason: String? {
+        #if DEBUG
+        // `--preview-controls` renders fan controls without a helper, for snapshots. Nothing can be sent without one.
+        if CommandLine.arguments.contains("--preview-controls") { return nil }
+        #endif
         if let tool = ConflictDetector.blocker(in: conflicts, area: .fans) {
             return String(localized: "The background helper of \(tool.name) is running and can write the same fan settings, even with its app closed. Stop it to use fan control here: sudo launchctl bootout system/\(tool.label)")
         }
@@ -72,6 +76,9 @@ final class ControlModel {
     }
 
     var chargeBlockReason: String? {
+        #if DEBUG
+        if CommandLine.arguments.contains("--preview-controls") { return nil }
+        #endif
         if let tool = ConflictDetector.blocker(in: conflicts, area: .charging) {
             return String(localized: "The background helper of \(tool.name) is running and can change charging, even with its app closed. Stop it to use the charge limit here: sudo launchctl bootout system/\(tool.label)")
         }
@@ -145,14 +152,21 @@ final class ControlModel {
         Task { await sendFans() }
     }
 
+    func setResponse(_ response: FanResponse) {
+        guard settings.stored.fan.response != response else { return }
+        settings.stored.fan.response = response
+        Task { await sendFans() }
+    }
+
     func setLinked(_ linked: Bool) {
         settings.stored.fan.linked = linked
         Task { await sendFans() }
     }
 
     func setCustomCurve(_ curve: FanCurve) {
-        guard case .success = CurveMath.validate(curve) else { return }
-        settings.stored.fan.customCurve = curve
+        let lifted = CurveMath.liftedToFloor(curve)
+        guard case .success = CurveMath.validate(lifted) else { return }
+        settings.stored.fan.customCurve = lifted
         settings.stored.fan.preset = .custom
         Task { await sendFans() }
     }
@@ -163,7 +177,8 @@ final class ControlModel {
         case .maximum: .maximum
         case .constant: .constant(percent: settings.stored.fan.constantPercent)
         case .custom: .curve(settings.stored.fan.customCurve)
-        case .silent, .balanced, .performance: preset.curve.map(FanPolicy.curve) ?? .system
+        // Retired; settings are migrated on load, so this is only reached by a stale value.
+        case .silent, .balanced, .performance: .curve(settings.stored.fan.customCurve)
         }
     }
 
@@ -173,7 +188,7 @@ final class ControlModel {
         for index in 0..<store.availability.fanCount {
             policies[index] = policy(for: fan.linked ? fan.preset : fan.perFan[index] ?? .system)
         }
-        return FanRequest(policies: policies, sensor: fan.sensor)
+        return FanRequest(policies: policies, sensor: fan.sensor, response: fan.response)
     }
 
     private func sendFans() async {
@@ -206,9 +221,24 @@ final class ControlModel {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let fan = settings.stored.fan
-        let curve = fan.preset == .custom ? fan.customCurve : fan.preset.curve ?? fan.customCurve
-        settings.stored.fan.saved.removeAll { $0.name == trimmed }
-        settings.stored.fan.saved.append(NamedPreset(name: trimmed, curve: curve, sensor: fan.sensor))
+        let preset = NamedPreset(name: trimmed, curve: fan.customCurve, sensor: fan.sensor)
+        // Replacing keeps the curve's place in the list.
+        if let index = settings.stored.fan.saved.firstIndex(where: { $0.name == trimmed }) {
+            settings.stored.fan.saved[index] = preset
+        } else {
+            settings.stored.fan.saved.append(preset)
+        }
+    }
+
+    func hasSavedCurve(named name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return settings.stored.fan.saved.contains { $0.name == trimmed }
+    }
+
+    /// The saved curve the Custom mode is running now, if it has not been edited since.
+    var activeSavedCurve: String? {
+        let fan = settings.stored.fan
+        return fan.saved.first { $0.curve == fan.customCurve && $0.sensor == fan.sensor }?.name
     }
 
     func renameCurve(_ old: String, to name: String) {
@@ -253,7 +283,42 @@ final class ControlModel {
         pendingCharge = Task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled, chargeBlockReason == nil else { return }
-            await helper.applyCharge(settings.stored.charge)
+            var request = settings.stored.charge
+            // A running pause lives in the helper only. Changing the limit must not end it.
+            request.pause = chargePause
+            await helper.applyCharge(request)
+        }
+    }
+
+    // MARK: Pause charging
+
+    /// The pause the helper is running, if any. The helper owns it, so it outlives the app and is not saved in settings.
+    var chargePause: ChargePause? { helper.status?.chargeRequest.pause }
+
+    /// Sets the adapter aside until the time or the level, whichever comes first. The helper also ends it at 20%,
+    /// before sleep, and after a day at most.
+    func pauseCharging(for duration: TimeInterval?, untilPercent: Int?) {
+        guard chargeBlockReason == nil, duration != nil || untilPercent != nil else { return }
+        var request = settings.stored.charge
+        request.pause = ChargePause(until: duration.map { Date().addingTimeInterval($0) }, untilPercent: untilPercent)
+        Task { await helper.applyCharge(request) }
+    }
+
+    func resumeCharging() {
+        var request = settings.stored.charge
+        request.pause = nil
+        Task { await helper.applyCharge(request) }
+    }
+
+    /// "Until 17:30 or 50%", for status lines.
+    static func describe(_ pause: ChargePause) -> String {
+        let time = pause.until.map { $0.formatted(date: .omitted, time: .shortened) }
+        let level = pause.untilPercent.map { "\($0)%" }
+        switch (time, level) {
+        case let (time?, level?): return String(localized: "until \(time) or \(level)")
+        case let (time?, nil): return String(localized: "until \(time)")
+        case let (nil, level?): return String(localized: "until \(level)")
+        default: return ""
         }
     }
 
@@ -301,7 +366,9 @@ final class ControlModel {
         if helper.state == .running, helper.status?.fansUnderControl.isEmpty == false {
             parts.append(fan.linked ? String(localized: "Fans on \(fan.preset.title)") : String(localized: "Fans set per fan"))
         }
-        if helper.state == .running, settings.stored.charge.enabled {
+        if let pause = chargePause {
+            parts.append(String(localized: "Charging paused \(Self.describe(pause))"))
+        } else if helper.state == .running, settings.stored.charge.enabled {
             parts.append(String(localized: "Charge limit \(settings.stored.charge.limit)%"))
         } else if let limit = nativeChargeLimit, limit < 100 {
             parts.append(String(localized: "Charge limit \(limit)%"))
@@ -318,7 +385,7 @@ extension FanPreset {
         case .balanced: String(localized: "Balanced")
         case .performance: String(localized: "Performance")
         case .maximum: String(localized: "Max")
-        case .constant: String(localized: "Constant")
+        case .constant: String(localized: "Fixed")
         case .custom: String(localized: "Custom")
         }
     }

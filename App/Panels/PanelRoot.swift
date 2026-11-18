@@ -74,8 +74,10 @@ struct PanelRoot: View {
             FansCard(context: context)
         case .battery, .power:
             PanelBatteryCard(context: context)
+            ChargePauseCard(context: context, compact: true)
         case nil:
             if store.availability.hasFans { FansCard(context: context) }
+            if store.availability.hasBattery { ChargePauseCard(context: context, compact: true) }
             LoadGrid(context: context)
             Card {
                 CardHeader(symbol: "thermometer.medium", title: String(localized: "Temperature"))
@@ -168,8 +170,16 @@ private struct FansCard: View {
         Card(padding: 12) {
             FansGrid(context: context, compact: true)
             if control.fanBlockReason == nil {
-                FanPresetPicker(control: control, presets: [.system, .silent, .balanced, .maximum])
-                if let line = followLine { Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                FanPresetPicker(control: control, presets: [.system, .constant, .custom])
+                    .frame(maxWidth: .infinity)
+                let fan = context.settings.stored.fan
+                if fan.linked, fan.preset == .constant {
+                    FixedSpeedRow(context: context)
+                } else if fan.linked, fan.preset == .custom {
+                    CustomCurveRow(context: context, followLine: followLine)
+                } else if let line = followLine {
+                    Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
             } else {
                 Text(control.helper.state == .running
                      ? String(localized: "Fan control is not available on this Mac.")
@@ -182,7 +192,7 @@ private struct FansCard: View {
 
     private var followLine: String? {
         let fan = context.settings.stored.fan
-        guard fan.preset.curve != nil || fan.preset == .custom, let summary = context.store.sensors.summary else { return nil }
+        guard fan.preset == .custom, let summary = context.store.sensors.summary else { return nil }
         let value: Double? = switch fan.sensor {
         case .cpuAverage: summary.cpuAverage
         case .cpuHottest: summary.cpuHottest
@@ -193,6 +203,66 @@ private struct FansCard: View {
         }
         guard let value else { return nil }
         return String(localized: "Following \(Format.temperature(value, unit: context.unit))")
+    }
+}
+
+/// Fixed speed, from the fan's minimum to its maximum.
+private struct FixedSpeedRow: View {
+    let context: AppContext
+
+    var body: some View {
+        let control = context.control
+        let percent = context.settings.stored.fan.constantPercent
+        HStack(spacing: 8) {
+            Slider(value: Binding(get: { percent }, set: { control.setConstant(percent: $0) }), in: 0...100, step: 5)
+                .controlSize(.small)
+                .accessibilityLabel(String(localized: "Fixed fan speed"))
+            Text(label(percent)).font(.caption).monospacedDigit().foregroundStyle(.secondary).frame(width: 74, alignment: .trailing)
+        }
+    }
+
+    private func label(_ percent: Double) -> String {
+        guard let fan = context.store.fans.current.first else { return "\(Int(percent))%" }
+        return "\(Format.rpm(CurveMath.rpm(percent: percent, minimum: fan.minimumRPM, maximum: fan.maximumRPM))) rpm"
+    }
+}
+
+/// Which saved curve Custom runs, and what it follows now.
+private struct CustomCurveRow: View {
+    let context: AppContext
+    let followLine: String?
+
+    var body: some View {
+        let control = context.control
+        let saved = context.settings.stored.fan.saved
+        let active = control.activeSavedCurve
+        HStack(spacing: 8) {
+            if saved.isEmpty {
+                Text("Save curves on the Fans page to pick them here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            } else {
+                Picker(String(localized: "Curve"), selection: Binding<String?>(
+                    get: { active },
+                    set: { name in
+                        if let preset = saved.first(where: { $0.name == name }) { control.applySavedCurve(preset) }
+                    }
+                )) {
+                    if active == nil { Text("Unsaved curve").tag(String?.none) }
+                    ForEach(saved, id: \.name) { preset in
+                        Text(preset.name).tag(Optional(preset.name))
+                    }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
+            Spacer(minLength: 6)
+            if let followLine {
+                Text(followLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
     }
 }
 
@@ -262,8 +332,11 @@ private struct PanelBatteryCard: View {
             Card(padding: 12) {
                 BatteryHero(model: model, battery: battery, limit: context.control.nativeChargeLimit, compact: true)
                 if !context.control.nativeChargeOptions.isEmpty {
-                    LabeledContent(String(localized: "Charge limit")) {
-                        NativeChargeLimitPicker(control: context.control).fixedSize()
+                    // Label above the picker: side by side, the five segments left the label a few points and it
+                    // wrapped one letter per line.
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Charge limit").font(.caption).foregroundStyle(.secondary)
+                        NativeChargeLimitPicker(control: context.control)
                     }
                 }
                 Divider()

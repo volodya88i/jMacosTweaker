@@ -595,24 +595,55 @@ final class SupervisorTests: XCTestCase {
         TemperatureSummary(cpuHottest: cpu, cpuAverage: cpu, gpu: gpu, ssd: ssd, battery: battery)
     }
 
-    // Invariant 4.
-    func testEngagesAtLimitAndRecoversWithHysteresis() {
-        var supervisor = ThermalSupervisor()
-        XCTAssertFalse(supervisor.update(summary: summary()))
-        XCTAssertTrue(supervisor.update(summary: summary(cpu: 95)))
-        XCTAssertNotNil(supervisor.reason)
-        XCTAssertTrue(supervisor.update(summary: summary(cpu: 90)), "still inside the recovery band")
-        XCTAssertFalse(supervisor.update(summary: summary(cpu: 84)))
-        XCTAssertNil(supervisor.reason)
+    /// Feeds one summary per second from `start`, and returns whether the supervisor was engaged after the last.
+    @discardableResult
+    private func feed(_ supervisor: inout ThermalSupervisor, _ value: TemperatureSummary, seconds: ClosedRange<Int>) -> Bool {
+        var engaged = false
+        for second in seconds { engaged = supervisor.update(summary: value, now: TimeInterval(second)) }
+        return engaged
     }
 
-    func testAnyCriticalSensorEngages() {
+    // Invariant 4. Owner report, 2026-11-18: one-second bursts on a P-core sent fans to maximum.
+    func testShortSpikesDoNotEngage() {
         var supervisor = ThermalSupervisor()
-        XCTAssertTrue(supervisor.update(summary: summary(gpu: 96)))
+        feed(&supervisor, summary(cpu: 70), seconds: 0...10)
+        XCTAssertFalse(feed(&supervisor, summary(cpu: 104), seconds: 11...13), "a three-second spike is skipped")
+        XCTAssertFalse(feed(&supervisor, summary(cpu: 70), seconds: 14...30))
+        XCTAssertEqual(supervisor.boostPercent, 0)
+    }
+
+    func testSustainedHeatEngagesInStepsAndRecovers() {
+        var supervisor = ThermalSupervisor()
+        XCTAssertFalse(feed(&supervisor, summary(cpu: 101), seconds: 0...6), "an average needs most of a window")
+        XCTAssertTrue(feed(&supervisor, summary(cpu: 101), seconds: 7...8))
+        XCTAssertNotNil(supervisor.reason)
+        XCTAssertEqual(supervisor.boostPercent, 25)
+        feed(&supervisor, summary(cpu: 101), seconds: 9...13)
+        XCTAssertEqual(supervisor.boostPercent, 50, "one more step after five seconds")
+        XCTAssertEqual(supervisor.boosted(40), 90)
+        XCTAssertTrue(feed(&supervisor, summary(cpu: 94), seconds: 14...30), "still inside the recovery band")
+        XCTAssertFalse(feed(&supervisor, summary(cpu: 85), seconds: 31...45))
+        XCTAssertNil(supervisor.reason)
+        XCTAssertEqual(supervisor.boostPercent, 0)
+        XCTAssertEqual(supervisor.boosted(40), 40)
+    }
+
+    func testCriticalSampleEngagesAtOnceAtFullSpeed() {
+        var supervisor = ThermalSupervisor()
+        XCTAssertTrue(supervisor.update(summary: summary(cpu: 108), now: 0))
+        XCTAssertEqual(supervisor.boostPercent, 100)
         supervisor = ThermalSupervisor()
-        XCTAssertTrue(supervisor.update(summary: summary(ssd: 75)))
+        XCTAssertTrue(supervisor.update(summary: summary(gpu: 109), now: 0))
+        XCTAssertEqual(supervisor.boostPercent, 100)
+    }
+
+    func testAnySustainedSensorEngages() {
+        var supervisor = ThermalSupervisor()
+        XCTAssertTrue(feed(&supervisor, summary(gpu: 100), seconds: 0...10))
         supervisor = ThermalSupervisor()
-        XCTAssertTrue(supervisor.update(summary: summary(battery: 50)))
+        XCTAssertTrue(feed(&supervisor, summary(ssd: 75), seconds: 0...10))
+        supervisor = ThermalSupervisor()
+        XCTAssertTrue(feed(&supervisor, summary(battery: 50), seconds: 0...10))
     }
 
     func testOverridesEvenASilentCustomCurve() {
@@ -622,13 +653,13 @@ final class SupervisorTests: XCTestCase {
         core.clientConnected(now: 0)
         _ = core.applyFans(allFans(.constant(percent: 0)), now: 0)
         XCTAssertEqual(port.value(FanKeys.target(0)), 2317)
-        inputs.cpu = 99
+        inputs.cpu = 109
         core.heartbeat(now: 1)
         core.tick(now: 1)
         XCTAssertEqual(port.value(FanKeys.target(0)), 7826)
         XCTAssertNotNil(core.status(protocolVersion: 1).supervisorReason)
         inputs.cpu = 80
-        for second in 2...30 {
+        for second in 2...45 {
             core.heartbeat(now: TimeInterval(second))
             core.tick(now: TimeInterval(second))
         }
@@ -642,7 +673,7 @@ final class SupervisorTests: XCTestCase {
         core.clientConnected(now: 0)
         _ = core.applyFans(allFans(.constant(percent: 0)), now: 0)
         port.rejectKeys = [FanKeys.target(0)]
-        inputs.cpu = 99
+        inputs.cpu = 109
         for second in 1...7 {
             core.heartbeat(now: TimeInterval(second))
             core.tick(now: TimeInterval(second))
@@ -808,14 +839,16 @@ final class CapabilityTests: XCTestCase {
         let port = MockPort()
         XCTAssertFalse(CapabilityProbe.fans(port: port, fanCount: 2, model: "Mac99,1", osMajor: 27, allowUnverified: false).isAvailable)
         XCTAssertTrue(CapabilityProbe.fans(port: port, fanCount: 2, model: "Mac99,1", osMajor: 27, allowUnverified: true).isAvailable)
-        XCTAssertFalse(CapabilityProbe.charge(port: port, hasBattery: true, model: "Mac16,8", osMajor: 27, allowUnverified: false).isAvailable)
+        XCTAssertTrue(CapabilityProbe.charge(port: port, hasBattery: true, model: "Mac16,8", osMajor: 27, allowUnverified: false).isAvailable)
+        XCTAssertFalse(CapabilityProbe.charge(port: port, hasBattery: true, model: "Mac99,1", osMajor: 27, allowUnverified: false).isAvailable)
     }
 
     func testOnlyWhatWasTestedIsOnTheVerifiedList() {
         let port = MockPort()
         XCTAssertTrue(CapabilityProbe.fans(port: port, fanCount: 2, model: "Mac16,8", osMajor: 27, allowUnverified: false).isAvailable)
         XCTAssertFalse(CapabilityProbe.fans(port: port, fanCount: 2, model: "Mac16,8", osMajor: 28, allowUnverified: false).isAvailable, "a new macOS needs testing")
-        XCTAssertTrue(CapabilityProbe.verified.chargeControl.isEmpty, "charge control has not been tested")
+        XCTAssertEqual(CapabilityProbe.verified.chargeControl.map(\.model), ["Mac16,8"], "only the Mac where CHIE was tested")
+        XCTAssertFalse(CapabilityProbe.charge(port: port, hasBattery: true, model: "Mac16,8", osMajor: 28, allowUnverified: false).isAvailable)
     }
 
     func testVerifiedListEnablesOnlyThatCombination() {
@@ -831,6 +864,126 @@ final class CapabilityTests: XCTestCase {
         XCTAssertFalse(CapabilityProbe.fans(port: MockPort(), fanCount: 0, model: "x", osMajor: 27, allowUnverified: true).isAvailable, "no fans")
         XCTAssertFalse(CapabilityProbe.charge(port: MockPort(withCharge: false), hasBattery: true, model: "x", osMajor: 27, allowUnverified: true).isAvailable)
         XCTAssertFalse(CapabilityProbe.charge(port: MockPort(), hasBattery: false, model: "x", osMajor: 27, allowUnverified: true).isAvailable)
+    }
+}
+
+/// Pause Charging: `CHIE` = 1 sets the adapter aside, so the battery runs down until the pause ends.
+final class ChargePauseTests: XCTestCase {
+    private final class Clock: @unchecked Sendable {
+        var now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    }
+
+    private func pause(hours: Double?, untilPercent: Int?, from clock: Clock) -> ChargeRequest {
+        var request = ChargeRequest.off
+        request.pause = ChargePause(until: hours.map { clock.now.addingTimeInterval($0 * 3600) }, untilPercent: untilPercent)
+        return request
+    }
+
+    private func makePausingCore(_ port: MockPort, _ inputs: MockInputs, _ clock: Clock, store: MemoryStore = MemoryStore()) -> ControlCore {
+        ControlCore(
+            inputs: inputs, port: port, journalStore: MemoryStore(), chargeStore: store,
+            fanCapability: .available, chargeCapability: .available, wallClock: { clock.now }
+        )
+    }
+
+    func testPauseEndsAtTheChosenLevel() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 80
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: nil, untilPercent: 50, from: clock), now: 0)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1, "adapter set aside")
+        XCTAssertTrue(core.needsTimer)
+        inputs.percent = 51
+        core.tick(now: 1)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1)
+        inputs.percent = 50
+        core.tick(now: 2)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+        XCTAssertNil(core.status(protocolVersion: 2).chargeRequest.pause, "a finished pause is cleared")
+        XCTAssertFalse(core.needsTimer, "nothing left to watch")
+    }
+
+    func testPauseEndsAtTheChosenTime() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 90
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: 1, untilPercent: nil, from: clock), now: 0)
+        clock.now += 3599
+        core.tick(now: 3599)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1)
+        clock.now += 1
+        core.tick(now: 3600)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+    }
+
+    // Invariant 8: the floor ends a pause whatever it asked for.
+    func testPauseNeverRunsBelowTheFloor() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 40
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: 5, untilPercent: 5, from: clock), now: 0)
+        XCTAssertEqual(core.status(protocolVersion: 2).chargeRequest.pause?.untilPercent, 20, "clamped to the floor")
+        inputs.percent = 20
+        core.tick(now: 1)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+    }
+
+    func testUnreadableBatteryEndsThePauseAtOnce() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 80
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: 1, untilPercent: nil, from: clock), now: 0)
+        inputs.percent = nil
+        core.tick(now: 1)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+    }
+
+    func testSleepAllowsChargingAndWakeResumesThePause() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 80
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: 2, untilPercent: nil, from: clock), now: 0)
+        core.willSleep()
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0, "the battery must not drain unattended")
+        clock.now += 600
+        core.didWake(now: 600)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1)
+    }
+
+    func testPauseIsCappedAtADay() {
+        let clock = Clock()
+        let levelOnly = ChargeStateMachine.validated(pause(hours: nil, untilPercent: 50, from: clock), now: clock.now)
+        XCTAssertEqual(levelOnly.pause?.until, clock.now.addingTimeInterval(ChargeStateMachine.longestPause))
+        let long = ChargeStateMachine.validated(pause(hours: 100, untilPercent: nil, from: clock), now: clock.now)
+        XCTAssertEqual(long.pause?.until, clock.now.addingTimeInterval(ChargeStateMachine.longestPause))
+        XCTAssertNil(ChargeStateMachine.clamped(pause(hours: nil, untilPercent: nil, from: clock)).pause, "no end means no pause")
+    }
+
+    func testPauseSurvivesAHelperRestart() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock(), store = MemoryStore()
+        inputs.percent = 80
+        inputs.isCharging = false
+        _ = makePausingCore(port, inputs, clock, store: store).applyCharge(pause(hours: 1, untilPercent: 50, from: clock), now: 0)
+        let next = makePausingCore(port, inputs, clock, store: store)
+        next.start()
+        next.tick(now: 1)
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1)
+    }
+
+    func testRestoreDefaultsEndsThePause() {
+        let port = MockPort(), inputs = MockInputs(), clock = Clock()
+        inputs.percent = 80
+        inputs.isCharging = false
+        let core = makePausingCore(port, inputs, clock)
+        _ = core.applyCharge(pause(hours: 1, untilPercent: nil, from: clock), now: 0)
+        core.restoreDefaults()
+        XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+        XCTAssertNil(core.status(protocolVersion: 2).chargeRequest.pause)
     }
 }
 
@@ -967,5 +1120,81 @@ final class ChargeControlTests: XCTestCase {
         XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 1)
         makeCore(port: port, inputs: inputs, journal: journal).start()
         XCTAssertEqual(port.value(KeyWhitelist.chargeInhibit), 0)
+    }
+}
+
+/// Owner report, 2026-11-18: with a curve topping out at 66%, a short burst of work in a photo app sent fans to maximum.
+final class SpikeAndFloorTests: XCTestCase {
+    private let lowCurve = FanCurve(points: [.init(temperature: 45, percent: 0), .init(temperature: 100, percent: 50)])
+
+    private func run(_ core: ControlCore, _ inputs: MockInputs, cpu: Double, seconds: ClosedRange<Int>) {
+        inputs.cpu = cpu
+        for second in seconds {
+            core.heartbeat(now: TimeInterval(second))
+            core.tick(now: TimeInterval(second))
+        }
+    }
+
+    private func targets(_ port: MockPort) -> [Double] {
+        port.writes.filter { $0.key == FanKeys.target(0) }.map(\.value)
+    }
+
+    func testShortSpikeOnTheControlSensorIsSkipped() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(FanRequest(policies: [0: .curve(lowCurve), 1: .curve(lowCurve)], sensor: .cpuHottest, response: .normal), now: 0)
+        run(core, inputs, cpu: 60, seconds: 1...20)
+        let settled = port.value(FanKeys.target(0)) ?? 0
+        run(core, inputs, cpu: 104, seconds: 21...25)
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, settled, accuracy: 30, "a five-second burst changes nothing")
+        run(core, inputs, cpu: 60, seconds: 26...40)
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, settled, accuracy: 30)
+    }
+
+    func testCurveTopIsTheCeilingBelowTheSupervisor() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(FanRequest(policies: [0: .curve(lowCurve), 1: .curve(lowCurve)], sensor: .cpuHottest, response: .fast), now: 0)
+        // 99 °C held: under the supervisor's 100 °C average. The floor at 99 °C is 36%, under the curve's 49%.
+        run(core, inputs, cpu: 99, seconds: 1...90)
+        let ceiling = CurveMath.rpm(percent: 50, minimum: 2317, maximum: 7826)
+        XCTAssertNil(core.status(protocolVersion: 1).supervisorReason)
+        for target in targets(port) { XCTAssertLessThanOrEqual(target, ceiling + 1) }
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, CurveMath.rpm(percent: CurveMath.percent(at: 99, curve: lowCurve), minimum: 2317, maximum: 7826), accuracy: 1)
+    }
+
+    func testNoRequestIsWeakerThanTheMacOSFloor() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        // A curve following the SSD stays cool while the CPU is hot: the floor follows the CPU anyway.
+        let flat = FanCurve(points: [.init(temperature: 30, percent: 0), .init(temperature: 100, percent: 0)])
+        _ = core.applyFans(FanRequest(policies: [0: .curve(flat), 1: .constant(percent: 0)], sensor: .ssd, response: .fast), now: 0)
+        run(core, inputs, cpu: 98, seconds: 1...60)
+        let floor = CurveMath.rpm(percent: CurveMath.floorPercent(at: 98), minimum: 2317, maximum: 7826)
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, floor, accuracy: 1)
+        XCTAssertEqual(port.value(FanKeys.target(1)) ?? 0, floor, accuracy: 1)
+    }
+
+    func testSustainedHeatBoostsAboveTheCurveInSteps() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(FanRequest(policies: [0: .curve(lowCurve), 1: .curve(lowCurve)], sensor: .cpuHottest, response: .fast), now: 0)
+        run(core, inputs, cpu: 90, seconds: 1...40)
+        let before = port.value(FanKeys.target(0)) ?? 0
+        run(core, inputs, cpu: 102, seconds: 41...50)
+        XCTAssertNotNil(core.status(protocolVersion: 1).supervisorReason)
+        let boosted = port.value(FanKeys.target(0)) ?? 0
+        XCTAssertGreaterThan(boosted, before + 1000, "a step adds a quarter of the range at once")
+        XCTAssertLessThan(boosted, 7826, "steps, not straight to maximum")
+        run(core, inputs, cpu: 102, seconds: 51...70)
+        XCTAssertEqual(port.value(FanKeys.target(0)), 7826, "steps continue while the heat lasts")
     }
 }

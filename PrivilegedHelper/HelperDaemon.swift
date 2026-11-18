@@ -124,7 +124,7 @@ final class HelperDaemon: NSObject, NSXPCListenerDelegate, HelperXPC, @unchecked
                 reply(self.encodedReply(error: "The request could not be read."))
                 return
             }
-            if decoded.enabled, let tool = self.blocker(.charging) {
+            if decoded.enabled || decoded.pause != nil, let tool = self.blocker(.charging) {
                 reply(self.encodedReply(error: "The background helper of \(tool.name) is running. Stop it before using the charge limit."))
                 return
             }

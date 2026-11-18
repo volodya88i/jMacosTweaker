@@ -3,7 +3,8 @@ import Shared
 import SwiftUI
 
 /// Drag points to edit. Double-click empty space to add a point, double-click a point to remove it.
-/// Points stay monotonic because each one is constrained between its neighbors while dragging.
+/// Points stay monotonic because each one is constrained between its neighbors while dragging, and never go below the
+/// macOS minimum, drawn as a shaded zone.
 struct CurveEditor: View {
     let curve: FanCurve
     let isEditable: Bool
@@ -24,7 +25,8 @@ struct CurveEditor: View {
     @Environment(\.dataTint) private var tint
 
     private static let temperatures = 30.0...100.0
-    private static let insets = EdgeInsets(top: 10, leading: 36, bottom: 20, trailing: 10)
+    /// The trailing inset leaves room for the 100 °C label and a point sitting on it.
+    private static let insets = EdgeInsets(top: 10, leading: 36, bottom: 20, trailing: 20)
     private static let height: CGFloat = 230
     private var shown: FanCurve { draft ?? curve }
 
@@ -95,11 +97,13 @@ struct CurveEditor: View {
             context.stroke(Path { $0.move(to: CGPoint(x: plot.minX, y: y)); $0.addLine(to: CGPoint(x: plot.maxX, y: y)) }, with: grid, lineWidth: 0.5)
             context.draw(Text("\(percent)%").font(.caption2).foregroundStyle(.secondary), at: CGPoint(x: plot.minX - 6, y: y), anchor: .trailing)
         }
-        for temperature in stride(from: 40, through: 90, by: 10) {
+        for temperature in stride(from: 40, through: 100, by: 10) {
             let x = Self.x(Double(temperature), in: plot)
             context.stroke(Path { $0.move(to: CGPoint(x: x, y: plot.minY)); $0.addLine(to: CGPoint(x: x, y: plot.maxY)) }, with: grid, lineWidth: 0.5)
             context.draw(Text(Format.temperature(Double(temperature), unit: unit)).font(.caption2).foregroundStyle(.secondary), at: CGPoint(x: x, y: plot.maxY + 11), anchor: .center)
         }
+
+        drawFloor(in: &context, plot: plot)
 
         let points = shown.points.map { position($0, in: size) }
         guard let first = points.first, let last = points.last else { return }
@@ -131,6 +135,28 @@ struct CurveEditor: View {
             context.fill(Path(ellipseIn: rect), with: .color(isEditable ? tint : .secondary))
             context.stroke(Path(ellipseIn: rect), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
         }
+    }
+
+    /// The weakest curve allowed. The helper applies it against the hottest CPU or GPU, so it holds whatever sensor the
+    /// curve follows.
+    private func drawFloor(in context: inout GraphicsContext, plot: CGRect) {
+        let range = Self.temperatures
+        var edge = Path()
+        var temperature = range.lowerBound
+        edge.move(to: CGPoint(x: Self.x(temperature, in: plot), y: Self.y(CurveMath.floorPercent(at: temperature), in: plot)))
+        while temperature < range.upperBound {
+            temperature = min(temperature + 1, range.upperBound)
+            edge.addLine(to: CGPoint(x: Self.x(temperature, in: plot), y: Self.y(CurveMath.floorPercent(at: temperature), in: plot)))
+        }
+        var zone = edge
+        zone.addLine(to: CGPoint(x: plot.maxX, y: plot.maxY))
+        zone.addLine(to: CGPoint(x: plot.minX, y: plot.maxY))
+        zone.closeSubpath()
+        context.fill(zone, with: .color(.secondary.opacity(0.12)))
+        context.stroke(edge, with: .color(.secondary.opacity(0.5)), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+        // Inside the zone, in its corner, clear of the edge and of curve points at 100 °C.
+        let label = context.resolve(Text("macOS minimum").font(.caption2).foregroundStyle(.secondary))
+        context.draw(label, at: CGPoint(x: plot.maxX - 14, y: plot.maxY - 3), anchor: .bottomTrailing)
     }
 
     private func drag(_ size: CGSize) -> some Gesture {
@@ -167,7 +193,8 @@ struct CurveEditor: View {
         let lowTemperature = (previous?.temperature ?? Self.temperatures.lowerBound - 1) + 1
         let highTemperature = (next?.temperature ?? Self.temperatures.upperBound + 1) - 1
         result.temperature = min(max(result.temperature, lowTemperature), highTemperature)
-        result.percent = min(max(result.percent, previous?.percent ?? 0), next?.percent ?? 100)
+        let lowest = max(previous?.percent ?? 0, CurveMath.floorPercent(at: result.temperature))
+        result.percent = min(max(result.percent, lowest), max(next?.percent ?? 100, lowest))
         return result
     }
 

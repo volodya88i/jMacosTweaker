@@ -20,7 +20,7 @@ struct RestoreButton: View {
 
 struct FanPresetPicker: View {
     let control: ControlModel
-    var presets: [FanPreset] = FanPreset.allCases
+    var presets: [FanPreset] = FanPreset.offered
     var fan: Int?
 
     var body: some View {
@@ -49,7 +49,7 @@ extension FanPreset {
         case .balanced: "circle.lefthalf.filled"
         case .performance: "gauge.with.dots.needle.67percent"
         case .maximum: "bolt.fill"
-        case .constant: "lock"
+        case .constant: "dial.medium"
         case .custom: "slider.horizontal.3"
         }
     }
@@ -61,7 +61,7 @@ extension FanPreset {
         case .balanced: String(localized: "Full speed at 88°")
         case .performance: String(localized: "Full speed at 82°")
         case .maximum: String(localized: "Always 100%")
-        case .constant: String(localized: "One fixed speed")
+        case .constant: String(localized: "One speed, any temperature")
         case .custom: String(localized: "Your own curve")
         }
     }
@@ -222,5 +222,141 @@ struct HelperSection: View {
                 .foregroundStyle(.secondary)
         }
         .task { await control.refresh() }
+    }
+}
+
+/// Pause Charging: sets the adapter aside so the Mac runs from its battery, until a time or a level. A backup for when
+/// the macOS limit does not hold. The helper runs it, so it keeps going with the app closed.
+struct ChargePauseCard: View {
+    let context: AppContext
+    var compact = false
+
+    @State private var duration: TimeInterval? = 3600
+    @State private var limitByLevel = true
+    @State private var level = 50
+
+    private var control: ControlModel { context.control }
+
+    static let durations: [(TimeInterval?, String)] = [
+        (1800, String(localized: "30 min")), (3600, String(localized: "1 hour")), (7200, String(localized: "2 hours")),
+        (14400, String(localized: "4 hours")), (nil, String(localized: "No time limit"))
+    ]
+
+    var body: some View {
+        Group {
+            if compact { compactRow } else { fullCard }
+        }
+        // While a pause runs, its end is checked now and then, so the card notices when the helper ends it.
+        .task(id: control.chargePause) {
+            while control.chargePause != nil, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                await control.helper.refresh()
+            }
+        }
+    }
+
+    private var fullCard: some View {
+        Card {
+            CardHeader(symbol: "pause.circle", title: String(localized: "Pause Charging")) {
+                if control.chargePause != nil { StatusBadge(text: String(localized: "Paused"), color: .orange) }
+            }
+            if let pause = control.chargePause {
+                active(pause)
+            } else if let reason = control.chargeBlockReason {
+                InlineNotice(text: reason)
+                if control.helper.state != .running, control.helper.state != .checking {
+                    CommandLineView(command: control.installCommand)
+                }
+            } else {
+                setup
+            }
+        }
+    }
+
+    /// One row for the menu bar popovers: state on the left, Pause or Resume on the right.
+    private var compactRow: some View {
+        let pause = control.chargePause
+        let blocked = control.chargeBlockReason != nil
+        return Card(padding: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: pause == nil ? "bolt.batteryblock" : "pause.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(pause == nil ? Color.secondary : .orange)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pause == nil ? String(localized: "Charging") : String(localized: "Charging paused"))
+                        .font(.subheadline.weight(.semibold))
+                    Text(pause.map { String(localized: "On battery \(ControlModel.describe($0))") }
+                         ?? (blocked
+                             ? (control.helper.state == .running ? String(localized: "Pausing is not available on this Mac") : String(localized: "Pausing needs the helper"))
+                             : String(localized: "Stop charging for a while")))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+                Spacer(minLength: 6)
+                if pause != nil {
+                    Button(String(localized: "Resume")) { control.resumeCharging() }
+                        .glassProminentButton()
+                } else if !blocked {
+                    Menu(String(localized: "Pause")) {
+                        Section(String(localized: "For")) {
+                            ForEach(Self.durations.filter { $0.0 != nil }, id: \.1) { value, title in
+                                Button(title) { control.pauseCharging(for: value, untilPercent: nil) }
+                            }
+                        }
+                        Section(String(localized: "Until the battery is at")) {
+                            ForEach([80, 70, 60, 50], id: \.self) { level in
+                                Button("\(level)%") { control.pauseCharging(for: nil, untilPercent: level) }
+                            }
+                        }
+                    }
+                    .fixedSize()
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
+    private func active(_ pause: ChargePause) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Running from the battery \(ControlModel.describe(pause)).")
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                control.resumeCharging()
+            } label: {
+                Label(String(localized: "Resume Charging"), systemImage: "bolt.fill")
+            }
+            .glassProminentButton()
+            .controlSize(compact ? .small : .regular)
+        }
+    }
+
+    private var setup: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker(String(localized: "For"), selection: $duration) {
+                ForEach(Self.durations, id: \.1) { value, title in Text(title).tag(value) }
+            }
+            .fixedSize()
+            HStack {
+                Toggle(String(localized: "Or until the battery is at"), isOn: $limitByLevel)
+                Stepper(value: $level, in: ChargeStateMachine.pauseLevelRange, step: 5) {
+                    Text("\(level)%").monospacedDigit().frame(width: 40, alignment: .trailing)
+                }
+                .disabled(!limitByLevel)
+            }
+            Button {
+                control.pauseCharging(for: duration, untilPercent: limitByLevel ? level : nil)
+            } label: {
+                Label(String(localized: "Pause Charging"), systemImage: "pause.fill")
+            }
+            .glassProminentButton()
+            .disabled(duration == nil && !limitByLevel)
+            Text("The Mac runs from its battery even on the adapter, so the level goes down. Charging comes back at the time or level you chose, at 20% at the latest, before the Mac sleeps, after a day at most, and when you press Resume. Then the macOS limit applies again.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

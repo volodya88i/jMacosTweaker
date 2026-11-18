@@ -59,15 +59,17 @@ final class AppContext {
     let settings: AppSettings
     let store: MonitorStore
     let control: ControlModel
+    let updates: UpdateChecker
     var section = WindowSection.dashboard
     var modulesHiddenByMenuBar: [Module] = []
     @ObservationIgnored var openWindow: (WindowSection) -> Void = { _ in }
     @ObservationIgnored var closePanel: () -> Void = {}
 
-    init(settings: AppSettings, store: MonitorStore, control: ControlModel) {
+    init(settings: AppSettings, store: MonitorStore, control: ControlModel, updates: UpdateChecker) {
         self.settings = settings
         self.store = store
         self.control = control
+        self.updates = updates
     }
 
     var engine: SamplingEngine { store.engine }

@@ -100,8 +100,8 @@ extension MemoryPressure {
 extension SensorGroup {
     var title: String {
         switch self {
-        case .cpuPerformance: String(localized: "CPU performance")
-        case .cpuEfficiency: String(localized: "CPU efficiency")
+        case .cpuPerformance: String(localized: "P-cores (performance)")
+        case .cpuEfficiency: String(localized: "E-cores (efficiency)")
         case .gpu: String(localized: "GPU")
         case .soc: String(localized: "SoC")
         case .ssd: String(localized: "SSD")

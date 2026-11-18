@@ -24,7 +24,7 @@ struct FansPage: View {
 
     /// The curve on show. Built-in curves are read-only, and editing one starts a Custom curve from it.
     private var shownCurve: FanCurve? {
-        fanSettings.preset == .custom ? fanSettings.customCurve : fanSettings.preset.curve
+        fanSettings.preset == .custom ? fanSettings.customCurve : nil
     }
 
     var body: some View {
@@ -70,7 +70,7 @@ struct FansPage: View {
             }
             .disabled(blockReason != nil)
         }
-        .sampling([.fans, .temperatureSummary], engine: store.engine)
+        .sampling([.fans, .temperatureSummary], every: 2, engine: store.engine)
         .task { await control.refresh() }
     }
 
@@ -86,14 +86,14 @@ struct FansPage: View {
         if showsLink || showsConstant || store.availability.hasBattery {
             Card {
                 if showsConstant {
-                    LabeledContent(String(localized: "Constant speed")) {
+                    LabeledContent(String(localized: "Fixed speed")) {
                         HStack(spacing: 10) {
                             Slider(
                                 value: Binding(get: { fanSettings.constantPercent }, set: { control.setConstant(percent: $0) }),
                                 in: 0...100,
                                 step: 5
                             )
-                            .accessibilityLabel(String(localized: "Constant fan speed"))
+                            .accessibilityLabel(String(localized: "Fixed fan speed"))
                             Text(constantLabel).monospacedDigit().foregroundStyle(.secondary).frame(width: 130, alignment: .trailing)
                         }
                         .frame(maxWidth: 420)
@@ -133,10 +133,10 @@ private struct PresetGrid: View {
     var body: some View {
         let selected = context.settings.stored.fan.preset
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
-            ForEach(FanPreset.allCases, id: \.self) { preset in
+            ForEach(FanPreset.offered, id: \.self) { preset in
                 PresetCard(
                     preset: preset,
-                    curve: preset == .custom ? context.settings.stored.fan.customCurve : preset.curve,
+                    curve: preset == .custom ? context.settings.stored.fan.customCurve : nil,
                     constant: context.settings.stored.fan.constantPercent,
                     isSelected: preset == selected
                 ) {
@@ -264,7 +264,12 @@ private struct CurveCard: View {
     var body: some View {
         Card {
             HStack {
-                Text(String(localized: "Curve “\(fanSettings.preset.title)”")).font(.headline)
+                if let name = control.activeSavedCurve {
+                    Text(String(localized: "Curve “\(name)”")).font(.headline)
+                } else {
+                    Text(String(localized: "Custom curve")).font(.headline)
+                    Text(String(localized: "not saved")).font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
                 Picker(String(localized: "Temperature source"), selection: Binding(get: { fanSettings.sensor }, set: { control.setSensor($0) })) {
                     ForEach(sensorOptions, id: \.0) { Text($0.1).tag($0.0) }
@@ -272,28 +277,88 @@ private struct CurveCard: View {
                 .fixedSize()
             }
             CurveEditor(curve: curve, isEditable: true, currentTemperature: controlTemperature, unit: context.unit) { control.setCustomCurve($0) }
-            Text(fanSettings.preset == .custom
-                 ? String(localized: "Drag points to edit. Double-click empty space to add a point, or a point to remove it.")
-                 : String(localized: "Editing a built-in curve starts a Custom curve from it."))
+            Text(String(localized: "Drag points to edit. Double-click empty space to add a point, or a point to remove it."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            ResponseRow(control: control, response: fanSettings.response)
             Divider()
             SavedCurves(context: context)
         }
     }
 }
 
-/// Named curves. Click to use, right-click to rename or delete.
+/// How long a rise must last before fans follow it.
+private struct ResponseRow: View {
+    let control: ControlModel
+    let response: FanResponse
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Response")
+                Spacer()
+                Picker(String(localized: "Response"), selection: Binding(get: { response }, set: { control.setResponse($0) })) {
+                    ForEach(FanResponse.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+            Text(response.caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+extension FanResponse {
+    var title: String {
+        switch self {
+        case .fast: String(localized: "Fast")
+        case .normal: String(localized: "Normal")
+        case .calm: String(localized: "Calm")
+        }
+    }
+
+    var caption: String {
+        switch self {
+        case .fast: String(localized: "Fans follow a rise after 3 seconds. Short bursts of work are heard.")
+        case .normal: String(localized: "Rises shorter than 10 seconds are skipped, so a brief burst of work does not spin fans up.")
+        case .calm: String(localized: "Only heat that lasts 30 seconds speeds fans up, and they speed up gently.")
+        }
+    }
+}
+
+/// Named curves. Click to use, right-click to rename or delete. A name already in use asks before replacing.
 private struct SavedCurves: View {
     let context: AppContext
     @State private var isSaving = false
     @State private var renaming: String?
     @State private var name = ""
+    @State private var pending: PendingReplace?
+
+    /// What waits for the owner to confirm replacing curves of the same name.
+    private enum PendingReplace: Identifiable {
+        case save(String)
+        case rename(from: String, to: String)
+        case importing([NamedPreset], clashes: [String])
+
+        var id: String {
+            switch self {
+            case let .save(name): "save \(name)"
+            case let .rename(from, to): "rename \(from) \(to)"
+            case let .importing(_, clashes): "import \(clashes.joined(separator: ","))"
+            }
+        }
+    }
 
     private var control: ControlModel { context.control }
     private var saved: [NamedPreset] { context.settings.stored.fan.saved }
 
     var body: some View {
+        let active = control.activeSavedCurve
         HStack(spacing: 8) {
             Text("Saved").foregroundStyle(.secondary)
             if saved.isEmpty {
@@ -302,23 +367,28 @@ private struct SavedCurves: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 6) {
                     ForEach(saved, id: \.name) { preset in
-                        Button(preset.name) { control.applySavedCurve(preset) }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.capsule)
-                            .contextMenu {
-                                Button(String(localized: "Rename…")) {
-                                    name = preset.name
-                                    renaming = preset.name
-                                }
-                                Button(String(localized: "Delete"), role: .destructive) { control.deleteCurve(preset.name) }
+                        Group {
+                            if preset.name == active {
+                                Button(preset.name) { control.applySavedCurve(preset) }.buttonStyle(.borderedProminent)
+                            } else {
+                                Button(preset.name) { control.applySavedCurve(preset) }.buttonStyle(.bordered)
                             }
+                        }
+                        .buttonBorderShape(.capsule)
+                        .contextMenu {
+                            Button(String(localized: "Rename…")) {
+                                name = preset.name
+                                renaming = preset.name
+                            }
+                            Button(String(localized: "Delete"), role: .destructive) { control.deleteCurve(preset.name) }
+                        }
                     }
                 }
             }
             .scrollIndicators(.hidden)
             Menu {
                 Button(String(localized: "Save Current Curve…")) {
-                    name = ""
+                    name = active ?? ""
                     isSaving = true
                 }
                 Divider()
@@ -331,26 +401,94 @@ private struct SavedCurves: View {
         }
         .alert(String(localized: "Save curve"), isPresented: $isSaving) {
             TextField(String(localized: "Name"), text: $name)
-            Button(String(localized: "Save")) { control.saveCurve(named: name) }
+            Button(String(localized: "Save")) {
+                if control.hasSavedCurve(named: name) {
+                    ask(.save(name.trimmingCharacters(in: .whitespacesAndNewlines)))
+                } else {
+                    control.saveCurve(named: name)
+                }
+            }
             Button(String(localized: "Cancel"), role: .cancel) {}
         }
         .alert(String(localized: "Rename curve"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField(String(localized: "Name"), text: $name)
             Button(String(localized: "Rename")) {
-                if let renaming { control.renameCurve(renaming, to: name) }
+                guard let old = renaming else { return }
+                let new = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                if new != old, control.hasSavedCurve(named: new) {
+                    ask(.rename(from: old, to: new))
+                } else {
+                    control.renameCurve(old, to: new)
+                }
             }
             Button(String(localized: "Cancel"), role: .cancel) {}
+        }
+        .alert(replaceTitle, isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { item in
+            Button(String(localized: "Replace"), role: .destructive) { replace(item) }
+            if case let .importing(presets, clashes) = item {
+                Button(String(localized: "Keep Both")) { importKeepingBoth(presets, clashes: clashes) }
+            }
+            Button(String(localized: "Cancel"), role: .cancel) {}
+        } message: { item in
+            switch item {
+            case .save, .rename:
+                Text("The saved curve with this name will be replaced. This cannot be undone.")
+            case let .importing(_, clashes):
+                Text("Already saved: \(clashes.joined(separator: ", ")). Replace them, or keep both with a number added to the imported names.")
+            }
+        }
+    }
+
+    private var replaceTitle: String {
+        switch pending {
+        case let .save(name), let .rename(_, name): String(localized: "Replace “\(name)”?")
+        case let .importing(_, clashes): String(localized: "Replace \(clashes.count) saved curves?")
+        case nil: ""
+        }
+    }
+
+    /// An alert cannot be presented from inside another alert's button, so the question waits for the first to close.
+    private func ask(_ item: PendingReplace) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            pending = item
+        }
+    }
+
+    private func replace(_ item: PendingReplace) {
+        switch item {
+        case let .save(name):
+            control.saveCurve(named: name)
+        case let .rename(from, to):
+            control.renameCurve(from, to: to)
+        case let .importing(presets, _):
+            let names = Set(presets.map(\.name))
+            context.settings.stored.fan.saved.removeAll { names.contains($0.name) }
+            context.settings.stored.fan.saved.append(contentsOf: presets)
+        }
+    }
+
+    private func importKeepingBoth(_ presets: [NamedPreset], clashes: [String]) {
+        var taken = Set(saved.map(\.name))
+        for var preset in presets {
+            if taken.contains(preset.name) {
+                var number = 2
+                while taken.contains("\(preset.name) \(number)") { number += 1 }
+                preset.name = "\(preset.name) \(number)"
+            }
+            taken.insert(preset.name)
+            context.settings.stored.fan.saved.append(preset)
         }
     }
 
     private func exportPreset() {
         let fan = context.settings.stored.fan
-        guard let curve = fan.preset == .custom ? fan.customCurve : fan.preset.curve else { return }
+        let name = control.activeSavedCurve ?? fan.preset.title
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "\(fan.preset.title).json"
+        panel.nameFieldStringValue = "\(name).json"
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let preset = NamedPreset(name: fan.preset.title, curve: curve, sensor: fan.sensor)
+        let preset = NamedPreset(name: name, curve: fan.customCurve, sensor: fan.sensor)
         if let data = try? PresetFile.encode([preset]) { try? data.write(to: url, options: .atomic) }
     }
 
@@ -361,10 +499,17 @@ private struct SavedCurves: View {
               let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 1_000_000,
               let data = try? Data(contentsOf: url) else { return }
         if case let .success(presets) = PresetFile.decode(data) {
-            let valid = presets.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.prefix(50)
-            let names = Set(valid.map(\.name))
-            context.settings.stored.fan.saved.removeAll { names.contains($0.name) }
-            context.settings.stored.fan.saved.append(contentsOf: valid)
+            // Curves weaker than macOS are lifted, as everywhere else.
+            let valid = presets.filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.prefix(50).map { preset in
+                NamedPreset(name: preset.name, curve: CurveMath.liftedToFloor(preset.curve), sensor: preset.sensor)
+            }
+            let existing = Set(saved.map(\.name))
+            let clashes = valid.map(\.name).filter { existing.contains($0) }
+            if clashes.isEmpty {
+                context.settings.stored.fan.saved.append(contentsOf: valid)
+            } else {
+                pending = .importing(Array(valid), clashes: clashes)
+            }
         } else {
             NSSound.beep()
         }
@@ -375,7 +520,7 @@ private struct AutoSwitchRow: View {
     let context: AppContext
 
     private var fan: FanSettings { context.settings.stored.fan }
-    private var presets: [FanPreset] { [.system, .silent, .balanced, .performance, .maximum] }
+    private var presets: [FanPreset] { FanPreset.offered }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

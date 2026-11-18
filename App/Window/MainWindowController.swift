@@ -23,6 +23,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     private func makeWindow() -> NSWindow {
         let controller = NSHostingController(rootView: RootView(context: context))
         controller.sceneBridgingOptions = [.toolbars]
+        // The window has fixed minimum and a free size, so SwiftUI need not measure the whole page for size constraints.
+        // With the default options it did so on every update: about a tenth of the window's CPU time.
+        controller.sizingOptions = []
         let window = NSWindow(contentViewController: controller)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.title = "jMacosTweaker"

@@ -19,6 +19,7 @@ tools/export_public.sh
 tools/export_manifest.txt
 tools/probes/chargelimitprobe.swift
 tools/probes/coremap.swift
+tools/probes/fanlog.swift
 tools/probes/gpustress.swift
 tools/probes/hidprobe.swift
 tools/probes/ioreportprobe.swift

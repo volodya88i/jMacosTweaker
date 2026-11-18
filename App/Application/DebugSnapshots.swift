@@ -11,6 +11,7 @@ enum DebugSnapshots {
         let arguments = CommandLine.arguments
         if arguments.contains("--open-window") { context.openWindow(.dashboard) }
         if arguments.contains("--benchmark") { Task { await benchmark(context: context) } }
+        if arguments.contains("--steady") { Task { await steady(context: context) } }
         guard let flag = arguments.firstIndex(of: "--snapshots"), arguments.indices.contains(flag + 1) else { return }
         let directory = URL(fileURLWithPath: arguments[flag + 1])
         if arguments.contains("--accent") { settings.stored.accent = .blue }
@@ -62,6 +63,40 @@ enum DebugSnapshots {
         NSApp.terminate(nil)
     }
 
+    /// `--steady` measures this process's CPU time with the window closed, then on each page for 15 s, on screen.
+    /// Run it with `--settings-suite <name>`, so the owner's settings are not touched.
+    private static func steady(context: AppContext) async {
+        func cpuSeconds() -> Double {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+        }
+        func measure(_ name: String, seconds: Double = 15) async {
+            try? await Task.sleep(for: .seconds(3))
+            let start = cpuSeconds()
+            try? await Task.sleep(for: .seconds(seconds))
+            print(String(format: "steady %-12@ %5.2f%% CPU", name, (cpuSeconds() - start) / seconds * 100))
+        }
+        try? await Task.sleep(for: .seconds(3))
+        // `--steady-only <section>` stays on one page for a minute, for attaching `sample`.
+        if let flag = CommandLine.arguments.firstIndex(of: "--steady-only"), CommandLine.arguments.indices.contains(flag + 1),
+           let section = WindowSection(rawValue: CommandLine.arguments[flag + 1]) {
+            context.openWindow(section)
+            await measure(section.rawValue, seconds: 60)
+            NSApp.terminate(nil)
+            return
+        }
+        await measure("closed")
+        context.openWindow(.dashboard)
+        for section in WindowSection.allCases where context.isAvailable(section) {
+            context.section = section
+            await measure(section.rawValue)
+        }
+        NSApp.windows.first { $0.title == context.section.title }?.close()
+        await measure("reclosed")
+        NSApp.terminate(nil)
+    }
+
     /// The real window, toolbar included, captured from its frame view.
     private static func renderWindow(context: AppContext, to url: URL) async {
         let controller = NSHostingController(rootView: RootView(context: context))
@@ -71,10 +106,12 @@ enum DebugSnapshots {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 1080, height: 740))
+        // `--tall` shows long pages whole, such as the curve editor at the bottom of Fans.
+        window.setContentSize(NSSize(width: 1080, height: CommandLine.arguments.contains("--tall") ? 1500 : 740))
         window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
         window.orderBack(nil)
-        try? await Task.sleep(for: .seconds(4))
+        // Pages sample every 2 s, and load figures need two samples, so 4 s could still show a dash.
+        try? await Task.sleep(for: .seconds(6))
         write(window.contentView?.superview ?? controller.view, to: url)
         window.orderOut(nil)
         window.contentViewController = nil

@@ -424,3 +424,25 @@ private final class ScriptedSMC: SMCReading, @unchecked Sendable {
 private final class TestClock: @unchecked Sendable {
     var now: TimeInterval = 0
 }
+
+final class SampleAlignmentTests: XCTestCase {
+    func testSlowRatesLandOnTheFastTicks() {
+        let aligned = SamplePlan.aligned([.cpu: 2, .temperatureSummary: 5, .battery: 30, .processes: 3])
+        XCTAssertEqual(aligned[.cpu], 2)
+        XCTAssertEqual(aligned[.temperatureSummary], 6, "5 s becomes 6 s, on the 2 s ticks")
+        XCTAssertEqual(aligned[.battery], 30)
+        XCTAssertEqual(aligned[.processes], 3, "4 s would be a third off, so 3 s stays")
+    }
+
+    func testAlignedPlanSharesWakeups() {
+        var plan = SamplePlan(coalesceWindow: 0.25)
+        plan.update(demands: [SampleDemand(sources: [.cpu], interval: 2), SampleDemand(sources: [.fans], interval: 5)], multiplier: 1, now: 0)
+        var wakeups = 0
+        var time = 0.0
+        while time < 60, let next = plan.nextFire {
+            time = next
+            if !plan.takeDue(now: time).isEmpty { wakeups += 1 }
+        }
+        XCTAssertLessThanOrEqual(wakeups, 31, "one wakeup per 2 s tick, none in between")
+    }
+}

@@ -55,18 +55,23 @@ final class MenuBarController: NSObject {
     func refresh() {
         // A pinned sensor may need a lighter read once the sensor list is known. No change means no work here.
         updateDemands()
-        let visibleNow = computeVisibility()
+        // Each module's content is worked out once per batch and shared by the visibility check and the drawing.
+        let unit = settings.stored.temperatureUnit
+        let enabled = enabledWidgets
+        var contents: [Module: WidgetContent] = [:]
+        for config in enabled { contents[config.module] = WidgetEvaluator.content(for: config, store: store, unit: unit) }
+        let visibleNow = computeVisibility(enabled, contents)
         if visibleNow != visible {
             visible = visibleNow
             rebuild()
         }
-        update()
+        update(enabled, contents)
     }
 
-    private func computeVisibility() -> Set<Module> {
+    private func computeVisibility(_ enabled: [WidgetConfig], _ contents: [Module: WidgetContent]) -> Set<Module> {
         var result = Set<Module>()
-        for config in enabledWidgets {
-            let content = WidgetEvaluator.content(for: config, store: store, unit: settings.stored.temperatureUnit)
+        for config in enabled {
+            guard let content = contents[config.module] else { continue }
             if WidgetEvaluator.isVisible(
                 rule: config.visibility, raw: content.rawValue, battery: store.battery.current,
                 wasVisible: visible.contains(config.module)
@@ -148,8 +153,8 @@ final class MenuBarController: NSObject {
         button.setAccessibilityLabel(module?.title ?? "jMacosTweaker")
     }
 
-    private func entry(_ config: WidgetConfig) -> WidgetView.Entry {
-        let content = WidgetEvaluator.content(for: config, store: store, unit: settings.stored.temperatureUnit)
+    private func entry(_ config: WidgetConfig, _ contents: [Module: WidgetContent]) -> WidgetView.Entry {
+        let content = contents[config.module] ?? WidgetEvaluator.content(for: config, store: store, unit: settings.stored.temperatureUnit)
         return WidgetView.Entry(
             content: content,
             style: config.style,
@@ -158,15 +163,15 @@ final class MenuBarController: NSObject {
         )
     }
 
-    private func update() {
+    private func update(_ enabled: [WidgetConfig], _ contents: [Module: WidgetContent]) {
         let accent = Tokens.menuBarAccent(settings.stored.accent)
-        let shown = enabledWidgets.filter { visible.contains($0.module) }
+        let shown = enabled.filter { visible.contains($0.module) }
         if settings.stored.combined, let slot = slots[Self.combinedKey] {
-            apply(shown.map(entry), to: slot, accent: accent)
+            apply(shown.map { entry($0, contents) }, to: slot, accent: accent)
         }
         for config in shown {
             if let slot = slots[config.module.rawValue] {
-                apply([entry(config)], to: slot, accent: accent)
+                apply([entry(config, contents)], to: slot, accent: accent)
                 slot.item.button?.setAccessibilityValue(slot.view.entries.first?.content.value)
             }
         }

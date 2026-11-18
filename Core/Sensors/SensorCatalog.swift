@@ -114,8 +114,8 @@ public enum SensorCatalog {
     public static func smcName(key: String, group: SensorGroup) -> String {
         let label: String
         switch group {
-        case .cpuPerformance: label = "CPU P cluster"
-        case .cpuEfficiency: label = "CPU E cluster"
+        case .cpuPerformance: label = "P-core cluster"
+        case .cpuEfficiency: label = "E-core cluster"
         case .gpu: label = "GPU"
         case .soc: label = "SoC"
         case .battery: label = "Battery"

@@ -55,7 +55,27 @@ The app may only leave the system as safe as the default, or safer. These invari
 
 The control sets the same macOS value as System Settings, through a private client, from the unprivileged app. macOS
 enforces it, including its own safety behavior. No SMC key is written. Only values macOS lists can be sent, and each
-change is read back. The helper's charge engine and its `CHIE` path stay off on the tested Mac, since `CHIE` cuts the adapter.
+change is read back. The helper's limit engine stays unused on the tested Mac, since `CHIE` cuts the adapter rather than
+holding charge.
+
+## Pause Charging (2026-11-15)
+
+The owner asked for a manual pause as a backup when the macOS limit does not hold. It is the one use of `CHIE` on Mac16,8,
+which is now on the verified list for charge control on macOS 27: the adapter is set aside, the Mac runs from its battery,
+and writing 0 brings the adapter back. Run by the helper, so it keeps going with the app closed.
+
+| Rule | Where | Test |
+| --- | --- | --- |
+| Ends at the chosen time or level, whichever is first | `ChargeStateMachine.evaluate` | `testPauseEndsAtTheChosenLevel`, `testPauseEndsAtTheChosenTime` |
+| Never below 20%, whatever was asked | Floor check before the pause; level clamped to 20 to 95 | `testPauseNeverRunsBelowTheFloor` |
+| Unreadable battery ends it at once | Percent checked first | `testUnreadableBatteryEndsThePauseAtOnce` |
+| Never longer than a day, even when only a level is given | `ChargeStateMachine.validated` | `testPauseIsCappedAtADay` |
+| No draining while asleep: charging is allowed before sleep and the pause resumes after wake | `ControlCore.willSleep` | `testSleepAllowsChargingAndWakeResumesThePause` |
+| Survives a helper restart, with a wall-clock end | Saved with the charge policy | `testPauseSurvivesAHelperRestart` |
+| Restore defaults ends it | `ControlCore.restoreDefaults` | `testRestoreDefaultsEndsThePause` |
+| A pause that does not stop charging within 60 s is turned off | Existing effect check | `testInhibitThatHasNoEffectIsTurnedOff` |
+
+Needs on-device verification: a full pause through the app, from start to its time, its level and Resume.
 
 ## Force-kill test (2026-11-01, Mac16,8, macOS 27.2)
 
@@ -92,6 +112,23 @@ Macs Fan Control's helper loads at boot, so fan control was correctly blocked wh
 Not changed, and why: `FileStore` sets 0600 after an atomic write, so a journal is briefly world-readable; it holds no
 secrets. The native charge limit client leaks one object once per launch through its private `alloc`/`init` path.
 
+## Review of 2026-11-18
+
+| Finding | Risk | Change |
+| --- | --- | --- |
+| The supervisor acted on single samples at 95 °C, and the hottest P-core on an M4 Pro passes that on short bursts | Fans at maximum many times an hour, ignoring the curve | 10 s averages at 100 °C, critical single sample at 108 °C, steps of 25% instead of a jump to maximum. `SupervisorTests` |
+| A curve could be flat at 0% up to 100 °C, or follow a cool sensor such as the SSD while the CPU is hot | Weaker cooling than macOS | The macOS floor, applied in the helper against the hottest CPU or GPU. `testNoRequestIsWeakerThanTheMacOSFloor` |
+| A curve's top point was not a ceiling below the supervisor | Fans above what the owner set | Spikes are filtered; the top point holds unless the supervisor engages. `testCurveTopIsTheCeilingBelowTheSupervisor` |
+
+## Network
+
+The app makes one kind of network request, and only with Settings > Updates on (off by default): a GET of
+`https://api.github.com/repos/volodya88i/jMacosTweaker/releases/latest` at most once a day, from an ephemeral session
+with no cookies, cache or credentials. The only header beyond the defaults is `User-Agent: jMacosTweaker`. Only
+`tag_name`, `draft` and `prerelease` are read; replies over 512 KB are refused, and a tag must be one to three plain
+numbers (`ReleaseCheckTests`). The release link is built from that number, never taken from the reply. Nothing is
+downloaded or installed. The helper makes no network requests.
+
 ## Known weaknesses
 
 - **Client verification is weaker without a Developer ID.** Ad-hoc signing has no team identity. The helper relies
@@ -125,8 +162,22 @@ Control stays off unless the model and macOS major version are on the verified l
 test passes. A root-owned flag file, created only by `install_helper.sh --allow-unverified-control`, allows a deliberate
 test. An update to a new macOS major version turns control off again.
 
-Thermal limits are conservative defaults: 95 °C for CPU and GPU, 75 °C for SSD, 50 °C for the battery, with 10 °C of
-recovery. They are not read from the system, because no readable system limit was found on this hardware.
+Thermal limits are judged on 10 s averages: 100 °C for CPU and GPU, 75 °C for SSD and 50 °C for the battery. A single
+CPU or GPU sample at 108 °C or more engages at once and sends fans to maximum. Otherwise the supervisor adds a quarter of
+each fan's range to whatever the request wants, then another quarter every 5 s, until the CPU and GPU averages fall below
+92 °C (SSD and battery: 10 °C below their limits). The limits are not read from the system, because no readable system
+limit was found on this hardware. Until 0.2.2 any single sample at 95 °C sent fans to maximum; on an M4 Pro the hottest
+P-core passes that on any short burst of work, so fans went to maximum many times an hour.
+
+No request is weaker than macOS: every curve and Constant speed is raised, in the helper, to a floor that follows the
+hottest CPU or GPU temperature (`CurveMath.macOSFloor`: fans at their minimum to 85 °C, 20% at 95 °C, 40% at 100 °C,
+70% at 110 °C). Fans under this app never stop, because 0% is the hardware minimum speed. The floor is modeled on the
+owner's report that macOS keeps fans below half speed at 100 °C, and is UNVERIFIED against a measured firmware curve:
+`tools/probes/fanlog.sh` records one, read-only, for a later revision.
+
+Short spikes are skipped before a curve sees them: the control temperature, and the temperature the floor follows, rise
+only once a value has held for the chosen Response window (3, 10 or 30 s) and fall at once. The supervisor does not use
+this filter.
 
 Discharge on adapter has no verified key. If requested, it behaves as inhibit: charging stops and the battery holds.
 The UI does not offer it.

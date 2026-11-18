@@ -17,18 +17,25 @@ the machine, and designed to fail safe.
 - **Menu bar modules:** CPU, Memory, GPU, Temperature, Fans, Battery, Power, Network and Disk. Each is independent. A module you turn
   off has no menu bar item and is not polled. Styles: text, icon and value, mini bar, sparkline, mini gauge.
 - **Sensors:** temperatures, voltages and currents, grouped and searchable, with minimum, average and maximum.
-- **Load:** per-core CPU, memory breakdown and pressure, GPU utilization, average frequencies, network and disk speed,
+- **Load:** per-core CPU with P-cores and E-cores labeled, memory breakdown and pressure, GPU utilization, average frequencies, network and disk speed,
   and your top processes. All of it is sampled only while visible or enabled.
 - **Battery and power:** charge, health, cycles, and how power splits between adapter, system and battery, updated every
   second. Devices the Mac is powering, such as a charging phone, are listed with their draw.
-- **Fans (needs helper):** presets, custom curves, a choice of control sensor, and preset import and export.
+- **Fans (needs helper):** Auto, a fixed speed, your own curves, or Max. Curves follow a sensor you choose, skip short
+  temperature spikes (Response: 3, 10 or 30 s), never go below a macOS minimum, and can be saved, imported and exported.
+  The menu bar popover switches modes and saved curves.
 - **Charge limit:** 80, 85, 90, 95 or 100%, using the macOS setting. Charging stops at the limit and the Mac runs from the
   adapter, without using the battery. Needs no helper. Lower limits are not possible. See
   [Known limitations](#known-limitations).
+- **Pause Charging (needs helper):** stop taking charge for a while, for example for an hour or until the battery is at
+  50%, when the macOS limit does not hold. The Mac runs from its battery during the pause, so the level goes down.
+  Charging comes back at the chosen time or level, at 20% at the latest, before sleep and after a day at most.
 - **Appearance:** a native macOS look in light and dark, Liquid Glass on macOS 26 and later, and a graph color that follows
   the system accent color or one you choose.
 
-No telemetry. No network calls.
+No telemetry. No network requests, except an optional update check: off by default, it reads the latest version number
+from this repository's GitHub releases once a day and shows a notice in the window. It sends nothing about your Mac, and
+never downloads or installs anything.
 
 ## Requirements
 
@@ -105,7 +112,10 @@ The app may only leave the system as safe as the default, or safer. Full details
   fan and charge keys.
 - If the app quits, crashes or hangs, or the Mac sleeps, or a sensor fails, or a write fails, fans return to system
   control.
-- A thermal supervisor overrides every preset and cannot be turned off.
+- A thermal supervisor overrides every preset and cannot be turned off. It acts on heat that lasts 10 s, or at once on
+  a critical reading, and raises fans in steps.
+- No curve or Fixed speed can cool less than macOS does: the helper raises it to a floor that follows the hottest CPU
+  or GPU, and the curve editor shows that floor as a shaded zone.
 - Fan speeds are clamped to the limits the hardware reports. Every write is read back.
 - Charging is never inhibited at or below 20%, or when battery state is unreadable.
 - Changes are journaled before they are made, so they can be undone after a crash.
@@ -118,9 +128,9 @@ hash and a root-owned install path instead. See [SAFETY.md](SAFETY.md#known-weak
 
 Only what has actually been checked is listed here.
 
-| Mac | macOS | Monitoring | Fan control | Charge limit |
-| --- | --- | --- | --- | --- |
-| MacBook Pro, M4 Pro (Mac16,8) | 27.2 | Works, including adapter figures | Works: both fans, Constant and curves. Sleep and the thermal override not yet checked on hardware | Works through the macOS setting: 80 to 100%, holding on the adapter |
+| Mac | macOS | Monitoring | Fan control | Charge limit | Pause Charging |
+| --- | --- | --- | --- | --- | --- |
+| MacBook Pro, M4 Pro (Mac16,8) | 27.2 | Works, including adapter figures | Works: both fans, Fixed speed and curves. Sleep and the thermal override not yet checked on hardware | Works through the macOS setting: 80 to 100%, holding on the adapter | The key it uses was tested by hand: it sets the adapter aside within about 3 s and brings it back within seconds. The feature itself is new |
 
 Sensor names come from observation, not from Apple. Temperature groups were identified on this one Mac by watching
 which sensors respond to CPU and GPU load, and the raw key stays visible in each name.
@@ -133,7 +143,8 @@ which sensors respond to CPU and GPU load, and the raw key stays visible in each
   averages and hottest values instead.
 - Charge limits below 80% are not possible on the tested Mac. macOS accepts only 80, 85, 90, 95 and 100%. The keys in
   older material do not exist, and the one writable charge key (`CHIE`) cuts the adapter, so the battery would drain
-  rather than hold. Heat protection and top up are not offered for the same reason.
+  rather than hold. Heat protection and top up are not offered for the same reason. That draining is what Pause
+  Charging uses on purpose.
 - On a macOS version without a built-in charge limit, no limit is offered. Keys for older Macs have not been tested, so
   they are not used. [Reports](https://github.com/volodya88i/jMacosTweaker/issues) from owners of those Macs are welcome.
 - The charge limit uses a private macOS interface, which an update could change. The control then disappears, and the
