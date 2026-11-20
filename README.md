@@ -65,7 +65,7 @@ run the installer from the new image again.
 
 3. Open the app. It lives in the menu bar and has no Dock icon.
 
-Monitoring and the charge limit work right away. Settings shows how to add the helper later.
+Monitoring and the charge limit work right away. To add the helper later, use **Install Helper…** in Settings.
 
 ## Build and run
 
@@ -90,6 +90,12 @@ block a downloaded copy until you remove the quarantine flag, as shown under [Do
 Monitoring and the charge limit need no special access. Fan control changes hardware settings, which requires root, so
 it goes through a small daemon that you install yourself. **The app never asks for your password.**
 
+The easiest way is **Install Helper…** in Settings, or on the Fans page. macOS asks for an administrator password in its
+own dialog, and the app runs the same install script as below. Before it does, the app checks that its own signature,
+scripts included, is intact. The same place has **Update Helper…** after an update and **Remove Helper…**.
+
+Or run the script yourself in Terminal:
+
 ```bash
 sudo tools/install_helper.sh build/dd/Build/Products/Release/jMacosTweaker.app
 ```
@@ -101,8 +107,8 @@ sudo tools/install_helper.sh build/dd/Build/Products/Release/jMacosTweaker.app
 | Its launch configuration | `/Library/LaunchDaemons/com.jmacostweaker.helper.plist` |
 | The pinned code hash, restore record and charge policy | `/Library/Application Support/jMacosTweaker/` |
 
-Run the script again after every rebuild or update. The helper only accepts the exact build it pinned, and the app
-tells you when this is needed.
+Update the helper after every rebuild or update. The helper only accepts the exact build it pinned, and the app tells you
+when this is needed.
 
 ## Safety model
 

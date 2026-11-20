@@ -63,7 +63,7 @@ Monitoring only, without the helper:
 
    xattr -dr com.apple.quarantine /Applications/jMacosTweaker.app
 
-3. Open jMacosTweaker. It lives in the menu bar and has no Dock icon. Settings shows how to add the helper later.
+3. Open jMacosTweaker. It lives in the menu bar and has no Dock icon. To add the helper later, use Install Helper… in Settings.
 
 Updating: run the installer again. The helper accepts only the build it pinned, so every update needs it.
 NOTES

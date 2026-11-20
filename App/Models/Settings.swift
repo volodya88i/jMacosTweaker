@@ -162,8 +162,11 @@ enum Module: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Default interval. Battery changes slowly and also gets OS notifications.
     var defaultInterval: TimeInterval {
-        self == .battery ? 30 : 5
+        self == .battery ? 10 : 5
     }
+
+    /// The update intervals offered. Faster than 2 s cost more than they show; slower than 10 s looked frozen.
+    static let intervals: [TimeInterval] = [2, 3, 5, 10]
 }
 
 enum WidgetStyle: String, Codable, CaseIterable, Sendable {
@@ -303,7 +306,9 @@ final class AppSettings {
         }
         for index in result.widgets.indices {
             var config = result.widgets[index]
-            config.interval = config.interval.isFinite ? min(max(config.interval, 1), 60) : config.module.defaultInterval
+            // Snapped to an offered value; earlier versions also offered 1, 30 and 60 s.
+            let interval = config.interval.isFinite ? config.interval : config.module.defaultInterval
+            config.interval = Module.intervals.min { abs($0 - interval) < abs($1 - interval) } ?? config.module.defaultInterval
             if let value = config.warningAt, !value.isFinite { config.warningAt = nil }
             if let value = config.criticalAt, !value.isFinite { config.criticalAt = nil }
             switch config.visibility {
@@ -367,11 +372,26 @@ final class AppSettings {
 
     func updateWidget(_ module: Module, _ change: (inout WidgetConfig) -> Void) {
         guard let index = stored.widgets.firstIndex(where: { $0.module == module }) else { return }
-        change(&stored.widgets[index])
+        // Changed on a copy. Changing `stored.widgets[index]` in place held write access to `stored` for the whole closure,
+        // so a closure that read any setting, such as the temperature unit, crashed the app (owner report, 2026-11-20:
+        // three crashes setting the Temperature module's "Show above" value).
+        var widget = stored.widgets[index]
+        change(&widget)
+        stored.widgets[index] = widget
     }
 
     func widget(_ module: Module) -> WidgetConfig {
         stored.widgets.first { $0.module == module } ?? .standard(module)
+    }
+
+    /// Moves a module to where another one is, for drag and drop.
+    func moveWidget(_ module: Module, to target: Module) {
+        guard module != target, let from = stored.widgets.firstIndex(where: { $0.module == module }),
+              let to = stored.widgets.firstIndex(where: { $0.module == target }) else { return }
+        var widgets = stored.widgets
+        let moving = widgets.remove(at: from)
+        widgets.insert(moving, at: to)
+        stored.widgets = widgets
     }
 
     func moveWidget(_ module: Module, by offset: Int) {

@@ -316,12 +316,12 @@ struct Sparkline: View {
 // MARK: Notices
 
 /// Explains why something is unavailable, and always says what to do next.
-struct NoticeCard: View {
+struct NoticeCard<Accessory: View>: View {
     let symbol: String
     let title: String
     let text: String
     var level = ValueLevel.normal
-    var command: String?
+    @ViewBuilder var accessory: Accessory
 
     var body: some View {
         Card {
@@ -335,9 +335,7 @@ struct NoticeCard: View {
                     Text(text)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let command {
-                        CommandLineView(command: command).padding(.top, 4)
-                    }
+                    accessory.padding(.top, 4)
                 }
             }
         }

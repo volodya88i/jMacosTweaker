@@ -30,12 +30,11 @@ struct FansPage: View {
     var body: some View {
         PageScroll {
             if let reason = blockReason {
-                NoticeCard(
-                    symbol: "lock.fill",
-                    title: String(localized: "Fan control is read-only"),
-                    text: reason,
-                    command: commandForBlock
-                )
+                NoticeCard(symbol: "lock.fill", title: String(localized: "Fan control is read-only"), text: reason) {
+                    if needsInstall {
+                        HelperInstallPanel(control: control, allowUnverified: control.isUnverifiedOnly)
+                    }
+                }
             }
             if let error = control.helper.lastError {
                 Card { InlineNotice(text: error, level: .warning) }
@@ -74,10 +73,9 @@ struct FansPage: View {
         .task { await control.refresh() }
     }
 
-    private var commandForBlock: String? {
-        if control.helper.state != .running, control.helper.state != .checking { return control.installCommand }
-        if control.isUnverifiedOnly { return control.testInstallCommand }
-        return nil
+    /// The helper is missing or refuses this build, or it runs but this Mac is not verified, which a test install allows.
+    private var needsInstall: Bool {
+        (control.helper.state != .running && control.helper.state != .checking) || control.isUnverifiedOnly
     }
 
     @ViewBuilder private var options: some View {

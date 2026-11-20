@@ -162,7 +162,7 @@ struct ChargeLimitSection: View {
 /// Helper state, the exact command to run, and how to undo it. The app never asks for a password.
 struct HelperSection: View {
     let control: ControlModel
-    @State private var showUninstall = false
+    @State private var confirmingRemove = false
 
     private var state: (text: String, color: Color) {
         switch control.helper.state {
@@ -186,15 +186,10 @@ struct HelperSection: View {
             }
             if control.helper.state != .running {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Fan control needs a small root helper. Run this in Terminal. It copies the app to /Applications, installs the helper and pins this build. Run it again after every rebuild.")
+                    Text("Fan control and Pause Charging need a small helper that runs as root. Installing copies the app to Applications, installs the helper and pins this build. Do it again after every update.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    CommandLineView(command: control.installCommand)
-                    if Bundle.main.bundlePath.hasPrefix("/Volumes/") {
-                        Text("Running from the disk image? Double-click Install jMacosTweaker.command next to the app instead. It does the same.")
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    HelperInstallPanel(control: control)
                 }
             }
             if !control.idleConflictNames.isEmpty {
@@ -202,18 +197,18 @@ struct HelperSection: View {
             }
             if control.helper.state == .running {
                 LabeledContent(String(localized: "Uninstall")) {
-                    Button(String(localized: "Restore Defaults and Prepare Uninstall…")) {
-                        control.restoreDefaults()
-                        showUninstall = true
+                    HStack(spacing: 8) {
+                        if control.installer.running == .uninstall { ProgressView().controlSize(.small) }
+                        Button(String(localized: "Remove Helper…")) { confirmingRemove = true }
+                            .disabled(control.installer.running != nil)
                     }
                 }
-            }
-            if showUninstall {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Defaults restored. To remove the helper, run this in Terminal:")
-                        .foregroundStyle(.secondary)
-                    CommandLineView(command: control.uninstallCommand)
+                if let failure = control.installer.failure, control.installer.running == nil {
+                    InlineNotice(text: failure, level: .warning)
                 }
+            }
+            if control.installer.lastSuccess == .uninstall {
+                InlineNotice(text: String(localized: "Helper removed. Fans and charging are back under macOS control. The app stays in Applications."))
             }
         } header: {
             Text("Privileged Helper")
@@ -222,6 +217,65 @@ struct HelperSection: View {
                 .foregroundStyle(.secondary)
         }
         .task { await control.refresh() }
+        .confirmationDialog(String(localized: "Remove the helper?"), isPresented: $confirmingRemove) {
+            Button(String(localized: "Remove Helper"), role: .destructive) { control.removeHelper() }
+        } message: {
+            Text("Fans and charging go back to macOS first. Monitoring keeps working; fan control and Pause Charging need the helper again. macOS asks for your password.")
+        }
+    }
+}
+
+/// Installs or updates the helper with one click. macOS asks for the password in its own dialog; the Terminal command
+/// stays available for anyone who prefers it.
+struct HelperInstallPanel: View {
+    let control: ControlModel
+    /// For a Mac that is not on the verified list: a test install that allows control anyway.
+    var allowUnverified = false
+    @State private var showsCommand = false
+
+    private var title: String {
+        if allowUnverified { return String(localized: "Install for Testing…") }
+        switch control.helper.state {
+        case .needsRepin, .outdated, .notInstalledCopy: return String(localized: "Update Helper…")
+        default: return String(localized: "Install Helper…")
+        }
+    }
+
+    var body: some View {
+        let installer = control.installer
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    control.installHelper(allowUnverified: allowUnverified)
+                } label: {
+                    Label(title, systemImage: "lock.shield")
+                }
+                .glassProminentButton()
+                .disabled(installer.running != nil)
+                if installer.running != nil {
+                    ProgressView().controlSize(.small)
+                    Text("Installing…").foregroundStyle(.secondary)
+                } else {
+                    Text("macOS asks for your password. This app never sees it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if allowUnverified {
+                Text("This Mac is not on the verified list. A test install lets the helper write fan and charge settings anyway. If anything looks wrong, Restore System Defaults or quit the app: fans return to macOS within 5 seconds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let failure = installer.failure, installer.running == nil {
+                InlineNotice(text: failure, level: .warning)
+            }
+            DisclosureGroup(String(localized: "Use Terminal instead"), isExpanded: $showsCommand) {
+                CommandLineView(command: allowUnverified ? control.testInstallCommand : control.installCommand)
+                    .padding(.top, 4)
+            }
+            .font(.caption)
+        }
     }
 }
 
@@ -265,7 +319,7 @@ struct ChargePauseCard: View {
             } else if let reason = control.chargeBlockReason {
                 InlineNotice(text: reason)
                 if control.helper.state != .running, control.helper.state != .checking {
-                    CommandLineView(command: control.installCommand)
+                    HelperInstallPanel(control: control)
                 }
             } else {
                 setup

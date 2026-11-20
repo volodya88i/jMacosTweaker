@@ -94,10 +94,10 @@ final class ControlModel {
         switch helper.state {
         case .checking: String(localized: "Checking the helper.")
         case .notInstalled: String(localized: "Control needs the privileged helper. Monitoring works without it.")
-        case .needsRepin: String(localized: "This build is new, so the helper refuses it until you run the install script again.")
-        case .notInstalledCopy: String(localized: "Open the copy in /Applications to use control.")
-        case .outdated: String(localized: "The helper is outdated. Run the install script again.")
-        case .notResponding: String(localized: "The helper is not responding.")
+        case .needsRepin: String(localized: "This build is new, so the helper refuses it until you update the helper.")
+        case .notInstalledCopy: String(localized: "The helper trusts the copy in Applications, not this one. Open that copy, or update the helper from this one.")
+        case .outdated: String(localized: "The helper is from an earlier version. Update it to use control.")
+        case .notResponding: String(localized: "The helper is not responding. Installing it again usually fixes this.")
         case .running: nil
         }
     }
@@ -105,6 +105,30 @@ final class ControlModel {
     /// Installed tools that are idle right now. Shown as a note only.
     var idleConflictNames: [String] {
         conflicts.filter { !$0.isRunning }.map(\.tool.name)
+    }
+
+    let installer = HelperInstaller()
+
+    /// Installs or updates the helper from a button. macOS asks for the password; this app never sees it.
+    func installHelper(allowUnverified: Bool = false) {
+        Task {
+            guard await installer.run(.install(allowUnverified: allowUnverified)) else { return }
+            if installer.shouldRelaunchInstalledCopy {
+                installer.relaunchInstalledCopy()
+                return
+            }
+            await helper.refresh()
+            await refresh()
+        }
+    }
+
+    /// Hands fans and charging back first, then removes the helper.
+    func removeHelper() {
+        restoreDefaults()
+        Task {
+            guard await installer.run(.uninstall) else { return }
+            await helper.refresh()
+        }
     }
 
     var installCommand: String {
@@ -277,7 +301,11 @@ final class ControlModel {
     // MARK: Charge
 
     func updateCharge(_ change: (inout ChargeRequest) -> Void) {
-        change(&settings.stored.charge)
+        // Changed on a copy: a closure that reads settings while `stored` is being modified in place is an exclusivity
+        // violation, which crashes.
+        var charge = settings.stored.charge
+        change(&charge)
+        settings.stored.charge = charge
         // The slider fires many times while dragging, and only where it stops matters.
         pendingCharge?.cancel()
         pendingCharge = Task {

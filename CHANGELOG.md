@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.3 - 2026-11-20
+
+- **New app icon.**
+- **Install the helper with one click.** Settings and the Fans page have **Install Helper…**, **Update Helper…** after
+  an update, and **Remove Helper…**. macOS asks for an administrator password in its own dialog; the app never sees it.
+  The app checks its own signature, scripts included, before anything runs as root. The Terminal command is still there
+  under "Use Terminal instead". On a Mac that is not on the verified list, **Install for Testing…** allows control
+  anyway, with a warning.
+- Fixed: the app quit when changing a Temperature module's "Show above" or color values in the Menu Bar settings
+  (owner report: three crashes). Changing a setting while reading another one broke Swift's exclusive access rule.
+- **The Menu Bar page is redrawn:** each module has its own color, a one-line summary, and options in evenly spaced
+  rows. A row opens and closes with an animation when clicked anywhere, and the arrow sits centered in its own column.
+  Drag a module by the handle on the right to change its place in the menu bar.
+- Update intervals are 2, 3, 5 or 10 seconds. Saved values move to the nearest one; Battery now defaults to 10 s.
+- Clearer helper messages that say what to do. The installer refreshes the app's date so Finder and the Dock show a
+  new icon instead of a cached one.
+
 ## 0.2.2 - 2026-11-18
 
 - **Pause Charging**, on the Battery page and in the Battery popover: stop taking charge for 30 minutes to 4 hours, or

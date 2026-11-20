@@ -14,6 +14,8 @@ enum DebugSnapshots {
         if arguments.contains("--steady") { Task { await steady(context: context) } }
         guard let flag = arguments.firstIndex(of: "--snapshots"), arguments.indices.contains(flag + 1) else { return }
         let directory = URL(fileURLWithPath: arguments[flag + 1])
+        // macOS may serve a cached icon for this bundle identifier; the catalog holds the one this build ships.
+        if let icon = NSImage(named: "AppIcon") { NSApp.applicationIconImage = icon }
         if arguments.contains("--accent") { settings.stored.accent = .blue }
         Task {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

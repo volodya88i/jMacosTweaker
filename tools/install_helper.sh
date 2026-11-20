@@ -80,6 +80,8 @@ rm -rf "$APP_DEST"
 ditto "$STAGED" "$APP_DEST"
 chown -R root:wheel "$APP_DEST"
 chmod -R go-w "$APP_DEST"
+# A fresh modification date makes Finder and the Dock pick up a changed icon instead of a cached one.
+touch "$APP_DEST"
 
 mkdir -p /Library/PrivilegedHelperTools "$SUPPORT"
 chown root:wheel "$SUPPORT"

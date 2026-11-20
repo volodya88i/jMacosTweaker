@@ -14,7 +14,6 @@ tools/test.sh
 tools/verify_release.sh
 tools/perf.sh
 tools/make_dmg.sh
-tools/render_icon.swift
 tools/export_public.sh
 tools/export_manifest.txt
 tools/probes/chargelimitprobe.swift

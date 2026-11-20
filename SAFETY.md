@@ -120,6 +120,16 @@ secrets. The native charge limit client leaks one object once per launch through
 | A curve could be flat at 0% up to 100 °C, or follow a cool sensor such as the SSD while the CPU is hot | Weaker cooling than macOS | The macOS floor, applied in the helper against the hottest CPU or GPU. `testNoRequestIsWeakerThanTheMacOSFloor` |
 | A curve's top point was not a ceiling below the supervisor | Fans above what the owner set | Spikes are filtered; the top point holds unless the supervisor engages. `testCurveTopIsTheCeilingBelowTheSupervisor` |
 
+## Installing from the app
+
+**Install Helper…** runs the bundled `install_helper.sh` as root through `osascript` with `do shell script … with
+administrator privileges`, so macOS shows its own password dialog; the app never receives the password. Before that the
+app checks its own bundle with `SecStaticCodeCheckValidity` (all architectures, strict, nested code), so a copy whose
+scripts were edited after signing is refused (tested: a one-line change to the script fails the check). The script then
+applies all of its own checks to a root-owned staged copy, as before. Arguments are single-quoted for the shell and
+escaped for AppleScript (tested with spaces, quotes and apostrophes in paths). **Remove Helper…** restores defaults
+first, then runs `uninstall_helper.sh` the same way.
+
 ## Network
 
 The app makes one kind of network request, and only with Settings > Updates on (off by default): a GET of
