@@ -16,6 +16,8 @@ struct FanSettings: Codable, Hashable, Sendable {
     var saved: [NamedPreset] = []
     /// How quickly curves follow a rise. Normal skips spikes shorter than 10 s.
     var response = FanResponse.normal
+    /// On by default. The owner can move its limits or turn it off.
+    var protection = OverheatProtection.standard
 
     init() {}
 
@@ -37,6 +39,7 @@ struct FanSettings: Codable, Hashable, Sendable {
         presetOnBattery = value(.presetOnBattery, base.presetOnBattery)
         saved = value(.saved, base.saved)
         response = value(.response, base.response)
+        protection = value(.protection, base.protection)
     }
 }
 
@@ -340,6 +343,7 @@ final class AppSettings {
         result.migrations = max(result.migrations, Stored.currentMigrations)
         // Curves are never weaker than macOS. The helper enforces this too; lifting here keeps the editor honest.
         result.fan = retiringBuiltInPresets(result.fan)
+        result.fan.protection = result.fan.protection.clamped
         result.fan.customCurve = CurveMath.liftedToFloor(result.fan.customCurve)
         for index in result.fan.saved.indices {
             result.fan.saved[index].curve = CurveMath.liftedToFloor(result.fan.saved[index].curve)

@@ -66,6 +66,7 @@ struct FansPage: View {
                 if let curve = shownCurve {
                     CurveCard(context: context, curve: curve)
                 }
+                ProtectionCard(control: control, protection: fanSettings.protection, unit: context.unit)
             }
             .disabled(blockReason != nil)
         }
@@ -545,5 +546,105 @@ private struct AutoSwitchRow: View {
             ForEach(presets, id: \.self) { Text($0.title).tag($0) }
         }
         .fixedSize()
+    }
+}
+
+// MARK: Overheat protection
+
+/// The supervisor's CPU and GPU limits, and a way to turn it off. It applies to every mode but Auto, where macOS is in
+/// charge anyway. Turning it off asks first.
+private struct ProtectionCard: View {
+    let control: ControlModel
+    let protection: OverheatProtection
+    let unit: TemperatureUnit
+    @State private var confirmingOff = false
+
+    var body: some View {
+        Card {
+            HStack(spacing: 12) {
+                SettingsIcon(symbol: "flame", color: protection.enabled ? .red : .gray, size: 26)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Overheat protection")
+                    Text(protection.enabled
+                         ? String(localized: "When the CPU or GPU stays hot, fans step up toward the top of your curve, never past it.")
+                         : String(localized: "Off. Fans follow your curve or fixed speed at any temperature, never below the macOS minimum."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 12)
+                Toggle(String(localized: "Overheat protection"), isOn: Binding(
+                    get: { protection.enabled },
+                    set: { value in
+                        if value {
+                            var next = protection
+                            next.enabled = true
+                            control.setProtection(next)
+                        } else {
+                            confirmingOff = true
+                        }
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+            }
+            if protection.enabled {
+                Divider()
+                limitRow(
+                    String(localized: "Step fans up when the 10-second average reaches"),
+                    value: protection.sustainedCelsius,
+                    range: OverheatProtection.sustainedRange
+                ) { value in
+                    var next = protection
+                    next.sustainedCelsius = value
+                    // The critical limit moves up with it, so the two never cross.
+                    next.criticalCelsius = max(next.criticalCelsius, value + OverheatProtection.minimumGap)
+                    control.setProtection(next)
+                }
+                Divider()
+                limitRow(
+                    String(localized: "Top of the curve at once at"),
+                    value: protection.criticalCelsius,
+                    range: max(OverheatProtection.criticalRange.lowerBound, protection.sustainedCelsius + OverheatProtection.minimumGap)...OverheatProtection.criticalRange.upperBound
+                ) { value in
+                    var next = protection
+                    next.criticalCelsius = value
+                    control.setProtection(next)
+                }
+                Text("Once engaged, fans gain a quarter of their range every 5 seconds, up to your curve's highest point, until the average falls 8 °C below the first limit. A fixed speed is its own ceiling. Defaults: 100 °C and 108 °C.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if protection != .standard {
+                    Button(String(localized: "Restore Defaults")) { control.setProtection(.standard) }
+                        .controlSize(.small)
+                }
+            }
+            // On or off: protection never passes the owner's curve, so this is what still acts in real overheating.
+            InlineNotice(
+                text: String(localized: "Last resort, always on: if the CPU or GPU averages 110 °C, or the battery 55 °C, for 10 seconds, fans go back to macOS control."),
+                level: protection.enabled ? .normal : .warning
+            )
+        }
+        .confirmationDialog(String(localized: "Turn off overheat protection?"), isPresented: $confirmingOff) {
+            Button(String(localized: "Turn Off"), role: .destructive) {
+                var next = protection
+                next.enabled = false
+                control.setProtection(next)
+            }
+        } message: {
+            Text("Fans will follow your curve exactly, however hot the CPU or GPU gets, without stepping up toward its top; only the macOS minimum still applies. macOS slows the chip down to protect it, so work gets slower. At 110 °C held for 10 seconds, fans go back to macOS.")
+        }
+    }
+
+    private func limitRow(_ title: String, value: Double, range: ClosedRange<Double>, set: @escaping (Double) -> Void) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer(minLength: 12)
+            Stepper(value: Binding(get: { value }, set: { set(min(max($0, range.lowerBound), range.upperBound)) }), in: range, step: 1) {
+                Text(Format.temperature(value, unit: unit)).monospacedDigit().frame(minWidth: 52, alignment: .trailing)
+            }
+            .fixedSize()
+        }
     }
 }

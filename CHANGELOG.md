@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.4 - 2026-11-26
+
+- **Overheat protection is adjustable.** A new card on the Fans page sets when it steps fans up (10-second average,
+  85 to 105 °C, 100 °C by default) and when it jumps at once (95 to 110 °C, 108 °C by default), and can turn it off
+  after a confirmation.
+- **Protection stops at the top of your curve.** It no longer sends fans to their maximum: a curve steps up to its own
+  highest point and no further, and a Fixed speed is its own ceiling. Max still means maximum.
+- On or off, the last resort stays: if the CPU or GPU averages 110 °C, or the battery 55 °C, for 10 seconds, fans go
+  back to macOS control. The macOS minimum also still applies.
+- The helper protocol is now version 4, so update the helper.
+
 ## 0.2.3 - 2026-11-20
 
 - **New app icon.**

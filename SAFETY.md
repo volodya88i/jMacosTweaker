@@ -9,7 +9,7 @@ The app may only leave the system as safe as the default, or safer. These invari
 | 1 | Minimal whitelisted API, no raw key write | Closed enum of operations; clamping in the helper | Unit tests, code review |
 | 2 | Only the verified app may connect | Audit token, install path, pinned code directory hash | Tests, on-device |
 | 3 | Fail safe to system control | Watchdog, disconnect grace, wake handling, boot restore | Chaos tests, on-device |
-| 4 | Thermal supervisor overrides everything | Runs in the helper, before every write | Unit and chaos tests |
+| 4 | Thermal supervisor overrides everything, unless the owner turns it off; a hand-back to macOS at 110 °C stays | Runs in the helper, before every write | Unit and chaos tests |
 | 5 | Fans stay within hardware min and max; no manual mode without a live controller | Clamp at the writer; mode tied to controller lifetime | Unit tests, on-device |
 | 6 | Read-back after each write: next tick for fan targets, battery state for `CHIE`, which does not echo | Bounded retry, then revert and report | Chaos tests, on-device |
 | 7 | Restore journal; idempotent, de-duplicated writes | Journal before write | Unit tests, on-device |
@@ -172,9 +172,18 @@ Control stays off unless the model and macOS major version are on the verified l
 test passes. A root-owned flag file, created only by `install_helper.sh --allow-unverified-control`, allows a deliberate
 test. An update to a new macOS major version turns control off again.
 
-Thermal limits are judged on 10 s averages: 100 °C for CPU and GPU, 75 °C for SSD and 50 °C for the battery. A single
-CPU or GPU sample at 108 °C or more engages at once and sends fans to maximum. Otherwise the supervisor adds a quarter of
-each fan's range to whatever the request wants, then another quarter every 5 s, until the CPU and GPU averages fall below
+The owner can move the CPU and GPU limits (10 s average 85 to 105 °C, single reading 95 to 110 °C and at least 3 °C
+higher) or turn the supervisor off, from the Fans page; turning it off asks first. The helper clamps whatever it
+receives. On or off, a last resort that no setting removes hands fans back to macOS when the CPU or GPU averages
+110 °C, or the battery 55 °C, for 10 s. It is needed with protection on as well, because since 0.2.4 the supervisor
+never raises a curve past its own top point and adds nothing to a Fixed speed (owner's request: protection must not go
+to the fans' maximum). Max still means maximum. The macOS minimum also stays, so a curve is still never weaker than
+macOS (`ConfigurableProtectionTests`, `testCriticalReadingJumpsToTheCurveTop`, `testFixedSpeedIsItsOwnCeiling`).
+
+By default, thermal limits are judged on 10 s averages: 100 °C for CPU and GPU, 75 °C for SSD and 50 °C for the battery. A single
+CPU or GPU sample at 108 °C or more engages at once and sends a curve to its top point. Otherwise the supervisor adds a
+quarter of each fan's range to what the curve wants, then another quarter every 5 s, up to the curve's top point, until
+the CPU and GPU averages fall below
 92 °C (SSD and battery: 10 °C below their limits). The limits are not read from the system, because no readable system
 limit was found on this hardware. Until 0.2.2 any single sample at 95 °C sent fans to maximum; on an M4 Pro the hottest
 P-core passes that on any short burst of work, so fans went to maximum many times an hour.

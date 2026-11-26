@@ -118,8 +118,9 @@ The app may only leave the system as safe as the default, or safer. Full details
   fan and charge keys.
 - If the app quits, crashes or hangs, or the Mac sleeps, or a sensor fails, or a write fails, fans return to system
   control.
-- A thermal supervisor overrides every preset and cannot be turned off. It acts on heat that lasts 10 s, or at once on
-  a critical reading, and raises fans in steps.
+- A thermal supervisor acts on heat that lasts 10 s, or at once on a critical reading, and raises a curve in steps up to
+  its own top point, never past it. You can move its limits or turn it off on the Fans page. Either way, fans go back to
+  macOS if the CPU or GPU holds 110 °C.
 - No curve or Fixed speed can cool less than macOS does: the helper raises it to a floor that follows the hottest CPU
   or GPU, and the curve editor shows that floor as a shaded zone.
 - Fan speeds are clamped to the limits the hardware reports. Every write is read back.

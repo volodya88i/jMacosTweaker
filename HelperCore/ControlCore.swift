@@ -142,6 +142,7 @@ public final class ControlCore: @unchecked Sendable {
         case let .failure(error): return .failure(error)
         }
         fanRequest = validated
+        supervisor.configure(validated.protection ?? .standard)
         fanFaulted = false
         lastError = nil
         lastHeartbeat = now
@@ -262,6 +263,14 @@ public final class ControlCore: @unchecked Sendable {
         }
         supervisor.update(summary: summary, now: now)
         if summary.cpuHottest != nil || summary.gpu != nil { lastSupervisedAt = now }
+        // The last resort, with protection on or off: macOS's own control, never a speed this app picks. With protection
+        // capped at the owner's curve, heat that still reaches 110 °C needs it in both cases.
+        if let backstop = supervisor.backstop, fanRequestIsActive || !manualFans.isEmpty {
+            releaseAllFans()
+            fanRequest = nil
+            lastError = "\(backstop), so fans went back to macOS control."
+            return
+        }
 
         if let reason = staleControllerReason(now: now) {
             releaseAllFans()
@@ -290,7 +299,8 @@ public final class ControlCore: @unchecked Sendable {
         // The macOS floor follows the hottest CPU or GPU, whatever the curve follows, so no request is weaker than macOS.
         let hottest = [summary.cpuHottest, summary.gpu].compactMap { $0 }.max()
         let floor = hottest.map { CurveMath.floorPercent(at: floorFilter.add($0, now: now)) } ?? 0
-        // While the supervisor is engaged, each fan gets its boost on top, written at once. Invariant 4.
+        // While the supervisor is engaged, a curve gets its boost on top, written at once, up to the curve's own top point:
+        // protection never goes above what the owner set (owner's request, 2026-11-26). Invariant 4.
         let boosting = supervisor.isOverriding
 
         let needsSensor = request.policies.values.contains { if case .curve = $0 { return true } else { return false } }
@@ -328,8 +338,9 @@ public final class ControlCore: @unchecked Sendable {
             case .maximum:
                 command(fan: fan, rpm: limits.maximum, immediate: true)
             case let .constant(percent):
-                let wanted = supervisor.boosted(max(percent, floor))
-                command(fan: fan, rpm: CurveMath.rpm(percent: wanted, minimum: limits.minimum, maximum: limits.maximum), immediate: boosting)
+                // The fixed speed is its own ceiling, so protection adds nothing here; the macOS minimum and the hand-back
+                // at 110 °C still apply.
+                command(fan: fan, rpm: CurveMath.rpm(percent: max(percent, floor), minimum: limits.minimum, maximum: limits.maximum))
             case let .curve(curve):
                 if let control {
                     var ramp = ramps[fan] ?? FanRamp(tuning: Self.rampTuning(request.response ?? .normal))
@@ -343,7 +354,10 @@ public final class ControlCore: @unchecked Sendable {
                 // Sent every tick, because slewing takes several ticks to reach a goal the ramp reports only once.
                 let goal = curveGoals[fan] ?? limits.minimum
                 if boosting {
-                    let percent = supervisor.boosted(CurveMath.percent(rpm: goal, minimum: limits.minimum, maximum: limits.maximum))
+                    let current = CurveMath.percent(rpm: goal, minimum: limits.minimum, maximum: limits.maximum)
+                    let top = curve.points.map(\.percent).max() ?? 100
+                    // Never below where the curve and the floor already are, never above the curve's top point.
+                    let percent = max(current, min(top, supervisor.boosted(current)))
                     command(fan: fan, rpm: CurveMath.rpm(percent: percent, minimum: limits.minimum, maximum: limits.maximum), immediate: true)
                 } else if curveGoals[fan] != nil {
                     command(fan: fan, rpm: goal)
@@ -639,6 +653,8 @@ public final class ControlCore: @unchecked Sendable {
 
     /// Everything from the app is untrusted here, verified client or not.
     public static func validate(_ request: FanRequest, limits: [Int: FanLimits]) -> Result<FanRequest, RequestError> {
+        var request = request
+        request.protection = request.protection?.clamped
         for (fan, policy) in request.policies {
             guard limits[fan] != nil else { return .failure(.unknownFan(fan)) }
             switch policy {

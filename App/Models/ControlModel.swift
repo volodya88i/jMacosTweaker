@@ -20,6 +20,7 @@ final class ControlModel {
     @ObservationIgnored private var lastExternal: Bool?
     @ObservationIgnored private var lastAutoSwitch: Bool?
     @ObservationIgnored private var pendingSpeed: Task<Void, Never>?
+    @ObservationIgnored private var pendingProtection: Task<Void, Never>?
     @ObservationIgnored private var pendingCharge: Task<Void, Never>?
     @ObservationIgnored private var startWatch: Task<Void, Never>?
     /// Created only on Macs with a battery.
@@ -176,6 +177,19 @@ final class ControlModel {
         Task { await sendFans() }
     }
 
+    /// Steppers fire on every click, and only where they stop matters.
+    func setProtection(_ protection: OverheatProtection) {
+        let value = protection.clamped
+        guard settings.stored.fan.protection != value else { return }
+        settings.stored.fan.protection = value
+        pendingProtection?.cancel()
+        pendingProtection = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await sendFans()
+        }
+    }
+
     func setResponse(_ response: FanResponse) {
         guard settings.stored.fan.response != response else { return }
         settings.stored.fan.response = response
@@ -212,7 +226,7 @@ final class ControlModel {
         for index in 0..<store.availability.fanCount {
             policies[index] = policy(for: fan.linked ? fan.preset : fan.perFan[index] ?? .system)
         }
-        return FanRequest(policies: policies, sensor: fan.sensor, response: fan.response)
+        return FanRequest(policies: policies, sensor: fan.sensor, response: fan.response, protection: fan.protection)
     }
 
     private func sendFans() async {

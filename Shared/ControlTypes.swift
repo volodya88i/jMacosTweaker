@@ -62,17 +62,50 @@ public enum FanResponse: String, Codable, CaseIterable, Hashable, Sendable {
     }
 }
 
+/// The owner's overheat protection. Missing means the defaults. The helper clamps every value, and keeps a last-resort
+/// hand-back to macOS that no setting removes.
+public struct OverheatProtection: Codable, Hashable, Sendable {
+    public var enabled: Bool
+    /// CPU or GPU averaged over 10 s at or above this raises fans in steps.
+    public var sustainedCelsius: Double
+    /// A single CPU or GPU reading at or above this sends fans to maximum at once.
+    public var criticalCelsius: Double
+
+    public static let sustainedRange = 85.0...105.0
+    public static let criticalRange = 95.0...110.0
+    /// The critical limit sits at least this far above the sustained one.
+    public static let minimumGap = 3.0
+    public static let standard = OverheatProtection(enabled: true, sustainedCelsius: 100, criticalCelsius: 108)
+
+    public init(enabled: Bool, sustainedCelsius: Double, criticalCelsius: Double) {
+        self.enabled = enabled
+        self.sustainedCelsius = sustainedCelsius
+        self.criticalCelsius = criticalCelsius
+    }
+
+    /// Brings any value, from any source, back into the allowed ranges.
+    public var clamped: OverheatProtection {
+        let sustained = sustainedCelsius.isFinite ? min(max(sustainedCelsius, Self.sustainedRange.lowerBound), Self.sustainedRange.upperBound) : 100
+        let lowestCritical = max(Self.criticalRange.lowerBound, sustained + Self.minimumGap)
+        let critical = criticalCelsius.isFinite ? min(max(criticalCelsius, lowestCritical), Self.criticalRange.upperBound) : 108
+        return OverheatProtection(enabled: enabled, sustainedCelsius: sustained, criticalCelsius: critical)
+    }
+}
+
 /// What the app asks for. Per fan, or the same for all when linked.
 public struct FanRequest: Codable, Hashable, Sendable {
     public var policies: [Int: FanPolicy]
     public var sensor: ControlSensor
     /// Optional, so requests from earlier versions still decode. Missing means `.normal`.
     public var response: FanResponse?
+    /// Optional for the same reason. Missing means `OverheatProtection.standard`.
+    public var protection: OverheatProtection?
 
-    public init(policies: [Int: FanPolicy], sensor: ControlSensor, response: FanResponse? = nil) {
+    public init(policies: [Int: FanPolicy], sensor: ControlSensor, response: FanResponse? = nil, protection: OverheatProtection? = nil) {
         self.policies = policies
         self.sensor = sensor
         self.response = response
+        self.protection = protection
     }
 }
 

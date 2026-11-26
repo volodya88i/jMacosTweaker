@@ -646,24 +646,40 @@ final class SupervisorTests: XCTestCase {
         XCTAssertTrue(feed(&supervisor, summary(battery: 50), seconds: 0...10))
     }
 
-    func testOverridesEvenASilentCustomCurve() {
+    /// Owner's request, 2026-11-26: protection goes to the top of the curve, not to the fans' maximum.
+    func testCriticalReadingJumpsToTheCurveTop() {
         let port = MockPort()
         let inputs = MockInputs()
         let core = makeCore(port: port, inputs: inputs)
         core.clientConnected(now: 0)
-        _ = core.applyFans(allFans(.constant(percent: 0)), now: 0)
-        XCTAssertEqual(port.value(FanKeys.target(0)), 2317)
+        let quiet = FanCurve(points: [.init(temperature: 45, percent: 0), .init(temperature: 100, percent: 80)])
+        _ = core.applyFans(FanRequest(policies: [0: .curve(quiet), 1: .curve(quiet)], sensor: .cpuHottest, response: .fast), now: 0)
         inputs.cpu = 109
         core.heartbeat(now: 1)
         core.tick(now: 1)
-        XCTAssertEqual(port.value(FanKeys.target(0)), 7826)
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, CurveMath.rpm(percent: 80, minimum: 2317, maximum: 7826), accuracy: 1)
         XCTAssertNotNil(core.status(protocolVersion: 1).supervisorReason)
-        inputs.cpu = 80
-        for second in 2...45 {
+        inputs.cpu = 50
+        for second in 2...60 {
             core.heartbeat(now: TimeInterval(second))
             core.tick(now: TimeInterval(second))
         }
-        XCTAssertEqual(port.value(FanKeys.target(0)), 2317, "the request resumes after recovery")
+        XCTAssertNil(core.status(protocolVersion: 1).supervisorReason)
+        XCTAssertLessThan(port.value(FanKeys.target(0)) ?? 0, CurveMath.rpm(percent: 20, minimum: 2317, maximum: 7826), "the curve resumes after recovery")
+    }
+
+    func testFixedSpeedIsItsOwnCeiling() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(allFans(.constant(percent: 70)), now: 0)
+        inputs.cpu = 108
+        for second in 1...30 {
+            core.heartbeat(now: TimeInterval(second))
+            core.tick(now: TimeInterval(second))
+        }
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, CurveMath.rpm(percent: 70, minimum: 2317, maximum: 7826), accuracy: 1)
     }
 
     func testFailedOverrideHandsBackToSystem() {
@@ -671,7 +687,8 @@ final class SupervisorTests: XCTestCase {
         let inputs = MockInputs()
         let core = makeCore(port: port, inputs: inputs)
         core.clientConnected(now: 0)
-        _ = core.applyFans(allFans(.constant(percent: 0)), now: 0)
+        let quiet = FanCurve(points: [.init(temperature: 45, percent: 0), .init(temperature: 100, percent: 80)])
+        _ = core.applyFans(FanRequest(policies: [0: .curve(quiet), 1: .curve(quiet)], sensor: .cpuHottest, response: .fast), now: 0)
         port.rejectKeys = [FanKeys.target(0)]
         inputs.cpu = 109
         for second in 1...7 {
@@ -1181,20 +1198,121 @@ final class SpikeAndFloorTests: XCTestCase {
         XCTAssertEqual(port.value(FanKeys.target(1)) ?? 0, floor, accuracy: 1)
     }
 
-    func testSustainedHeatBoostsAboveTheCurveInSteps() {
+    /// The control sensor stays cool while the CPU is hot, so only protection lifts the fans, in steps, up to the
+    /// curve's top point and never to the fans' maximum.
+    func testSustainedHeatStepsUpToTheCurveTop() {
         let port = MockPort()
         let inputs = MockInputs()
         let core = makeCore(port: port, inputs: inputs)
         core.clientConnected(now: 0)
-        _ = core.applyFans(FanRequest(policies: [0: .curve(lowCurve), 1: .curve(lowCurve)], sensor: .cpuHottest, response: .fast), now: 0)
+        let top = FanCurve(points: [.init(temperature: 40, percent: 0), .init(temperature: 80, percent: 90)])
+        _ = core.applyFans(FanRequest(policies: [0: .curve(top), 1: .curve(top)], sensor: .ssd, response: .fast), now: 0)
         run(core, inputs, cpu: 90, seconds: 1...40)
         let before = port.value(FanKeys.target(0)) ?? 0
         run(core, inputs, cpu: 102, seconds: 41...50)
         XCTAssertNotNil(core.status(protocolVersion: 1).supervisorReason)
         let boosted = port.value(FanKeys.target(0)) ?? 0
         XCTAssertGreaterThan(boosted, before + 1000, "a step adds a quarter of the range at once")
-        XCTAssertLessThan(boosted, 7826, "steps, not straight to maximum")
+        XCTAssertLessThan(boosted, CurveMath.rpm(percent: 90, minimum: 2317, maximum: 7826) - 1, "steps, not straight to the top")
         run(core, inputs, cpu: 102, seconds: 51...70)
-        XCTAssertEqual(port.value(FanKeys.target(0)), 7826, "steps continue while the heat lasts")
+        XCTAssertEqual(port.value(FanKeys.target(0)) ?? 0, CurveMath.rpm(percent: 90, minimum: 2317, maximum: 7826), accuracy: 1, "the curve's top is the ceiling")
+    }
+}
+
+/// Owner's request, 2026-11-26: the limits can be moved and protection turned off, with a last resort that stays.
+final class ConfigurableProtectionTests: XCTestCase {
+    private let lowCurve = FanCurve(points: [.init(temperature: 45, percent: 0), .init(temperature: 100, percent: 50)])
+
+    private func request(_ protection: OverheatProtection) -> FanRequest {
+        FanRequest(policies: [0: .curve(lowCurve), 1: .curve(lowCurve)], sensor: .cpuHottest, response: .fast, protection: protection)
+    }
+
+    private func run(_ core: ControlCore, _ inputs: MockInputs, cpu: Double, seconds: ClosedRange<Int>) {
+        inputs.cpu = cpu
+        for second in seconds {
+            core.heartbeat(now: TimeInterval(second))
+            core.tick(now: TimeInterval(second))
+        }
+    }
+
+    func testValuesAreClampedAndNeverCross() {
+        let wild = OverheatProtection(enabled: true, sustainedCelsius: 200, criticalCelsius: 50).clamped
+        XCTAssertEqual(wild.sustainedCelsius, 105)
+        XCTAssertEqual(wild.criticalCelsius, 108, "at least 3 °C above the sustained limit")
+        let low = OverheatProtection(enabled: true, sustainedCelsius: 20, criticalCelsius: .nan).clamped
+        XCTAssertEqual(low.sustainedCelsius, 85)
+        XCTAssertEqual(low.criticalCelsius, 108)
+    }
+
+    func testALowerLimitEngagesEarlier() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(request(OverheatProtection(enabled: true, sustainedCelsius: 90, criticalCelsius: 100)), now: 0)
+        run(core, inputs, cpu: 92, seconds: 1...20)
+        XCTAssertNotNil(core.status(protocolVersion: 4).supervisorReason)
+    }
+
+    func testOffMeansTheCurveHoldsWhenHot() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        var off = OverheatProtection.standard
+        off.enabled = false
+        _ = core.applyFans(request(off), now: 0)
+        run(core, inputs, cpu: 109, seconds: 1...60)
+        XCTAssertNil(core.status(protocolVersion: 4).supervisorReason, "neither the average nor a critical reading engages")
+        // The macOS minimum still applies with protection off: 67% at 109 °C, above this curve's 50%.
+        let ceiling = CurveMath.rpm(percent: max(50, CurveMath.floorPercent(at: 109)), minimum: 2317, maximum: 7826)
+        let targets = port.writes.filter({ $0.key == FanKeys.target(0) }).map(\.value)
+        for target in targets { XCTAssertLessThanOrEqual(target, ceiling + 1) }
+        XCTAssertLessThan(targets.max() ?? 0, 7826, "no step up to maximum")
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 1, "still under the owner's control at 109 °C")
+    }
+
+    func testOffStillHandsBackToMacOSAt110() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        var off = OverheatProtection.standard
+        off.enabled = false
+        _ = core.applyFans(request(off), now: 0)
+        run(core, inputs, cpu: 90, seconds: 1...20)
+        run(core, inputs, cpu: 112, seconds: 21...40)
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 3, "back under macOS control")
+        XCTAssertEqual(port.value(FanKeys.mode(1)), 3)
+        XCTAssertEqual(port.value(KeyWhitelist.unlock), 0)
+        XCTAssertNil(core.status(protocolVersion: 4).fanRequest)
+        XCTAssertNotNil(core.lastError)
+    }
+
+    func testOnAlsoHandsBackToMacOSAt110() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        _ = core.applyFans(request(.standard), now: 0)
+        run(core, inputs, cpu: 90, seconds: 1...20)
+        run(core, inputs, cpu: 112, seconds: 21...40)
+        XCTAssertEqual(port.value(FanKeys.mode(0)), 3, "the curve's top was not enough, so macOS takes over")
+        XCTAssertNil(core.status(protocolVersion: 4).fanRequest)
+    }
+
+    func testTurningItBackOnRestoresTheSupervisor() {
+        let port = MockPort()
+        let inputs = MockInputs()
+        let core = makeCore(port: port, inputs: inputs)
+        core.clientConnected(now: 0)
+        var off = OverheatProtection.standard
+        off.enabled = false
+        _ = core.applyFans(request(off), now: 0)
+        run(core, inputs, cpu: 104, seconds: 1...20)
+        XCTAssertNil(core.status(protocolVersion: 4).supervisorReason)
+        _ = core.applyFans(request(.standard), now: 21)
+        run(core, inputs, cpu: 104, seconds: 22...35)
+        XCTAssertNotNil(core.status(protocolVersion: 4).supervisorReason)
     }
 }
